@@ -55,7 +55,7 @@ ROOT_URLCONF = 'data_analizer.urls'
 TEMPLATES = [
     {
         'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
+        'DIRS': [BASE_DIR / 'data_analizer' / 'templates'],
         'APP_DIRS': True,
         'OPTIONS': {
             'context_processors': [
