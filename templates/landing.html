@@ -3,64 +3,57 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Excel Analyzer - Data Insights</title>
+    <title>Excel AI Analyzer - Transform Messy Sheets into Clean Insights</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body class="bg-slate-900 text-white min-h-screen flex flex-col justify-between font-sans">
+<body class="bg-slate-900 text-white font-sans antialiased">
 
     <!-- Header Navigation -->
-    <header class="max-w-7xl w-full mx-auto px-6 py-6 flex justify-between items-center">
-        <div class="text-2xl font-bold tracking-tight text-indigo-400">📊 ExcelAnalyzer</div>
-        
+    <header class="max-w-7xl mx-auto px-6 py-6 flex justify-between items-center">
+        <div class="text-2xl font-bold tracking-tight text-indigo-400">📊 ExcelAnalyzer.ai</div>
         <div>
             {% if user.is_authenticated %}
-                <div class="flex items-center gap-4">
-                    <span class="text-gray-300 font-medium">Welcome, <strong class="text-white">{{ user.username }}</strong>!</span>
-                    <form method="post" action="{% url 'accounts:logout' %}" class="inline">
-                        {% csrf_token %}
-                        <button type="submit" class="bg-red-600/80 hover:bg-red-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition">
-                            Log Out
-                        </button>
-                    </form>
-                </div>
+                <a href="{% url 'analyzer:dashboard' %}" class="bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 rounded-lg font-semibold transition">Dashboard</a>
             {% else %}
-                <div class="flex items-center gap-4">
-                    <a href="{% url 'accounts:login' %}" class="text-gray-300 hover:text-white font-medium">Sign In</a>
-                    <a href="{% url 'accounts:signup' %}" class="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2.5 rounded-lg font-semibold transition">
-                        Sign Up
-                    </a>
-                </div>
+                <a href="{% url 'accounts:login' %}" class="text-gray-300 hover:text-white mr-6 font-medium">Log In</a>
+                <a href="{% url 'accounts:signup' %}" class="bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 rounded-lg font-semibold transition">Get Started Free</a>
             {% endif %}
         </div>
     </header>
 
-    <!-- Hero Content -->
-    <main class="max-w-4xl mx-auto text-center px-6 py-16 flex-grow flex flex-col justify-center items-center">
-        {% if user.is_authenticated %}
-            <div class="bg-indigo-900/30 border border-indigo-500/30 rounded-2xl p-8 max-w-xl w-full shadow-xl">
-                <h1 class="text-3xl font-bold text-indigo-300 mb-2">Welcome Back, {{ user.username }}! 👋</h1>
-                <p class="text-gray-400">You are successfully logged in and ready to analyze your Excel files.</p>
-            </div>
-        {% else %}
-            <span class="bg-indigo-900/50 text-indigo-300 text-sm font-medium px-4 py-1.5 rounded-full border border-indigo-700/50">Excel Data Normalization & Insights</span>
-            <h1 class="text-5xl font-extrabold mt-6 leading-tight">
-                Transform Messy Spreadsheets Into <span class="text-indigo-400">Clean Insights</span>
-            </h1>
-            <p class="text-gray-400 text-lg mt-6 max-w-2xl">
-                Automatically detect missing values, normalize unstandardized columns, and get instant data insights.
-            </p>
-            <div class="mt-8 flex gap-4">
-                <a href="{% url 'accounts:signup' %}" class="bg-indigo-600 hover:bg-indigo-500 text-white text-lg font-semibold px-8 py-3 rounded-xl transition">
-                    Get Started Free
-                </a>
-            </div>
-        {% endif %}
-    </main>
+    <!-- Hero Section -->
+    <section class="max-w-5xl mx-auto text-center px-6 py-24">
+        <span class="bg-indigo-900/50 text-indigo-300 text-sm font-medium px-4 py-1.5 rounded-full border border-indigo-700/50">Next-Gen Data Normalization Engine</span>
+        <h1 class="text-5xl md:text-6xl font-extrabold mt-6 leading-tight">
+            Turn Messy Excel Spreadsheets Into <span class="text-indigo-400">Actionable Data Insights</span>
+        </h1>
+        <p class="text-gray-400 text-lg mt-6 max-w-2xl mx-auto">
+            Automatically detect missing values, normalize unstandardized columns, generate instant statistical reports, and export clean database-ready datasets in seconds.
+        </p>
+        <div class="mt-10 flex justify-center gap-4">
+            <a href="{% url 'accounts:signup' %}" class="bg-indigo-600 hover:bg-indigo-500 text-white text-lg font-semibold px-8 py-3.5 rounded-xl shadow-lg transition">Start Analyzing Free</a>
+            <a href="#features" class="bg-slate-800 hover:bg-slate-700 text-gray-200 text-lg font-semibold px-8 py-3.5 rounded-xl transition">See Features</a>
+        </div>
+    </section>
 
-    <!-- Footer -->
-    <footer class="text-center py-6 text-gray-500 text-sm">
-        © 2026 ExcelAnalyzer. All rights reserved.
-    </footer>
+    <!-- Feature Grid -->
+    <section id="features" class="max-w-7xl mx-auto px-6 py-16 grid md:grid-cols-3 gap-8">
+        <div class="bg-slate-800/60 p-8 rounded-2xl border border-slate-700/50">
+            <div class="text-3xl mb-4">⚡</div>
+            <h3 class="text-xl font-bold text-white mb-2">Automated Normalization</h3>
+            <p class="text-gray-400">Identify formatting errors, inconsistent data types, and non-standard headers automatically.</p>
+        </div>
+        <div class="bg-slate-800/60 p-8 rounded-2xl border border-slate-700/50">
+            <div class="text-3xl mb-4">🔍</div>
+            <h3 class="text-xl font-bold text-white mb-2">Deep Insights</h3>
+            <p class="text-gray-400">Uncover summary statistics, null distributions, and duplication metrics instantly.</p>
+        </div>
+        <div class="bg-slate-800/60 p-8 rounded-2xl border border-slate-700/50">
+            <div class="text-3xl mb-4">🔒</div>
+            <h3 class="text-xl font-bold text-white mb-2">Enterprise Security</h3>
+            <p class="text-gray-400">Powered by isolated PostgreSQL database instances ensuring data confidentiality and integrity.</p>
+        </div>
+    </section>
 
 </body>
 </html>

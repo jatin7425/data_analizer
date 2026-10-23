@@ -38,6 +38,14 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+
+    # Third party apps
+    "crispy_forms",
+    "crispy_bootstrap5",
+
+    # Local apps
+    "apps.accounts.apps.AccountsConfig",
+    "apps.analyzer.apps.AnalyzerConfig",
 ]
 
 MIDDLEWARE = [
@@ -131,3 +139,10 @@ MAILERS = {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
 }
+
+CRISPY_ALLOWED_TEMPLATE_PACKS = "bootstrap5"
+CRISPY_TEMPLATE_PACK = "bootstrap5"
+
+LOGIN_REDIRECT_URL = 'analyzer:dashboard'
+LOGOUT_REDIRECT_URL = 'landing'
+LOGIN_URL = 'accounts:login'
