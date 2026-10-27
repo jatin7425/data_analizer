@@ -129,6 +129,17 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+MEDIA_ROOT = BASE_DIR / "media"
+
+CELERY_BROKER_URL = config(
+    "CELERY_BROKER_URL",
+    default="redis://localhost:6379/0",
+)
+CELERY_TASK_IGNORE_RESULT = True
+CELERY_TASK_ACKS_LATE = True
+CELERY_TASK_REJECT_ON_WORKER_LOST = True
+ANALYZER_OLLAMA_MODEL = config("OLLAMA_MODEL", default="qwen2.5:3b")
+ANALYZER_TASK_TIMEOUT = config("ANALYZER_TASK_TIMEOUT", default=1800, cast=int)
 
 
 # Email

@@ -1,8 +1,9 @@
 from django.urls import path
-from django.views.generic import RedirectView
+from . import views
 
 app_name = "analyzer"
 
 urlpatterns = [
-    path("", RedirectView.as_view(pattern_name="landing"), name="dashboard"),
+    path("", views.dashboard, name="dashboard"),
+    path("upload/", views.upload_excel, name="upload"),
 ]
