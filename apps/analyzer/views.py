@@ -3,7 +3,7 @@ import logging
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
-from django.shortcuts import redirect, render
+from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
 from .forms import ExcelUploadForm
@@ -25,6 +25,25 @@ def dashboard(request):
                 status__in=[AnalysisTask.Status.PENDING, AnalysisTask.Status.PROCESSING]
             ).exists(),
             "upload_form": ExcelUploadForm(),
+        },
+    )
+
+
+@login_required
+def task_detail(request, task_id):
+    task = get_object_or_404(
+        AnalysisTask.objects.filter(user=request.user),
+        pk=task_id,
+    )
+    schema_tables = task.database_design.get("tables", [])
+    reports = task.report_catalogue.get("reports", [])
+    return render(
+        request,
+        "analyzer/task_detail.html",
+        {
+            "task": task,
+            "schema_tables": schema_tables,
+            "reports": reports,
         },
     )
 

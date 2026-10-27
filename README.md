@@ -26,4 +26,4 @@ python manage.py runserver
 celery -A data_analizer worker --loglevel=info
 ```
 
-The dashboard refreshes while tasks are pending or processing. A task records its owner, uploaded workbook name, schema profile, database design, proposed SQL schema, report catalogue, status, and `is_deleted` flag. Set `CELERY_BROKER_URL`, `OLLAMA_MODEL`, or `ANALYZER_TASK_TIMEOUT` in the environment to override the defaults.
+The dashboard refreshes while tasks are pending or processing. Select a workbook name in the dashboard to open its analysis detail page, which shows the proposed normalized tables and column types, generated SQL, suggested reports and their metrics/filters/visualizations, and the original source-column profile. A task records its owner, uploaded workbook name, schema profile, database design, proposed SQL schema, report catalogue, status, and `is_deleted` flag. Set `CELERY_BROKER_URL`, `OLLAMA_MODEL`, or `ANALYZER_TASK_TIMEOUT` in the environment to override the defaults.

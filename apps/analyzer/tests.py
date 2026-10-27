@@ -138,14 +138,107 @@ class ExcelUploadTests(TestCase):
 
     def test_dashboard_only_lists_current_users_uploads(self):
         another_user = User.objects.create_user(username="another", password="test-password")
-        ExcelUpload.objects.create(
+        upload = ExcelUpload.objects.create(
             user=another_user,
             file=SimpleUploadedFile("private.xlsx", b"private spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=another_user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
         )
 
         response = self.client.get(reverse("analyzer:dashboard"))
 
         self.assertNotContains(response, "private.xlsx")
+        self.assertNotContains(
+            response,
+            reverse("analyzer:task_detail", args=[task.pk]),
+        )
+
+    def test_completed_task_detail_shows_schema_and_analysis_suggestions(self):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("sales.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            schema_profile=[
+                {
+                    "column_name": "Order ID",
+                    "pandas_dtype": "str",
+                    "null_count": 0,
+                    "null_percentage": 0,
+                    "unique_count": 5,
+                }
+            ],
+            database_design={
+                "tables": [
+                    {
+                        "table_name": "orders",
+                        "purpose": "Stores orders",
+                        "columns": [
+                            {
+                                "column_name": "order_id",
+                                "postgres_type": "TEXT",
+                                "nullable": False,
+                                "primary_key": True,
+                            }
+                        ],
+                    }
+                ]
+            },
+            proposed_schema='CREATE TABLE "orders" ("order_id" TEXT NOT NULL);',
+            report_catalogue={
+                "reports": [
+                    {
+                        "report_id": "sales_trends",
+                        "report_name": "Sales Trends",
+                        "category": "Sales",
+                        "description": "Review sales over time.",
+                        "required_columns": ["Order Date", "Amount"],
+                        "metrics": ["Total sales"],
+                        "filters": ["Date range"],
+                        "visualization": "bar_chart",
+                        "feasibility": "available",
+                    }
+                ]
+            },
+        )
+
+        response = self.client.get(
+            reverse("analyzer:task_detail", args=[task.pk])
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "orders")
+        self.assertContains(response, "order_id")
+        self.assertContains(response, "TEXT")
+        self.assertContains(response, 'CREATE TABLE &quot;orders&quot;')
+        self.assertContains(response, "Sales Trends")
+        self.assertContains(response, "Total sales")
+        self.assertContains(response, "Order Date, Amount")
+
+    def test_user_cannot_view_another_users_task_detail(self):
+        another_user = User.objects.create_user(username="another", password="test-password")
+        upload = ExcelUpload.objects.create(
+            user=another_user,
+            file=SimpleUploadedFile("private.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=another_user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+        )
+
+        response = self.client.get(
+            reverse("analyzer:task_detail", args=[task.pk])
+        )
+
+        self.assertEqual(response.status_code, 404)
 
     def test_dashboard_requires_login(self):
         self.client.logout()

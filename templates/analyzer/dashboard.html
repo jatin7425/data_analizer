@@ -62,7 +62,9 @@
                         <tbody class="divide-y divide-slate-700">
                             {% for task in tasks %}
                                 <tr class="align-top">
-                                    <td class="break-all px-5 py-4 font-medium">{{ task.excel_sheet_name }}</td>
+                                    <td class="break-all px-5 py-4 font-medium">
+                                        <a href="{% url 'analyzer:task_detail' task.id %}" class="text-indigo-300 hover:text-indigo-200 hover:underline">{{ task.excel_sheet_name }}</a>
+                                    </td>
                                     <td class="px-5 py-4 text-gray-300">
                                         {% for column in task.schema_profile %}
                                             {{ column.column_name }}{% if not forloop.last %}, {% endif %}
