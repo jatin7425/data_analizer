@@ -57,6 +57,7 @@
                                 <th class="px-5 py-3 font-semibold">Task status</th>
                                 <th class="px-5 py-3 font-semibold">Is deleted</th>
                                 <th class="px-5 py-3 font-semibold">Uploaded</th>
+                                <th class="px-5 py-3 font-semibold">Actions</th>
                             </tr>
                         </thead>
                         <tbody class="divide-y divide-slate-700">
@@ -80,6 +81,12 @@
                                     </td>
                                     <td class="px-5 py-4">{{ task.is_deleted|yesno:"Yes,No" }}</td>
                                     <td class="whitespace-nowrap px-5 py-4 text-gray-400">{{ task.created_at|date:"M j, Y, P" }}</td>
+                                    <td class="px-5 py-4">
+                                        <form method="post" action="{% url 'analyzer:delete_task' task.id %}" onsubmit="return confirm('Remove this analysis from your dashboard?');">
+                                            {% csrf_token %}
+                                            <button type="submit" class="rounded-lg border border-red-800 px-3 py-1.5 font-medium text-red-300 hover:bg-red-950">Delete</button>
+                                        </form>
+                                    </td>
                                 </tr>
                             {% endfor %}
                         </tbody>

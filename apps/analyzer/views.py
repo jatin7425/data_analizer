@@ -15,7 +15,10 @@ logger = logging.getLogger(__name__)
 
 @login_required
 def dashboard(request):
-    tasks = AnalysisTask.objects.filter(user=request.user).select_related("upload")
+    tasks = AnalysisTask.objects.filter(
+        user=request.user,
+        is_deleted=False,
+    ).select_related("upload")
     return render(
         request,
         "analyzer/dashboard.html",
@@ -32,7 +35,7 @@ def dashboard(request):
 @login_required
 def task_detail(request, task_id):
     task = get_object_or_404(
-        AnalysisTask.objects.filter(user=request.user),
+        AnalysisTask.objects.filter(user=request.user, is_deleted=False),
         pk=task_id,
     )
     schema_tables = task.database_design.get("tables", [])
@@ -46,6 +49,19 @@ def task_detail(request, task_id):
             "reports": reports,
         },
     )
+
+
+@login_required
+@require_POST
+def delete_task(request, task_id):
+    task = get_object_or_404(
+        AnalysisTask.objects.filter(user=request.user, is_deleted=False),
+        pk=task_id,
+    )
+    task.is_deleted = True
+    task.save(update_fields=["is_deleted", "updated_at"])
+    messages.success(request, f"Analysis for {task.excel_sheet_name} was removed.")
+    return redirect("analyzer:dashboard")
 
 
 @login_required

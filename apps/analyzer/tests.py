@@ -240,6 +240,56 @@ class ExcelUploadTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    def test_user_can_soft_delete_task_from_dashboard(self):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("remove-me.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            database_design={"tables": [{"table_name": "orders"}]},
+        )
+
+        response = self.client.post(
+            reverse("analyzer:delete_task", args=[task.pk])
+        )
+
+        self.assertRedirects(response, reverse("analyzer:dashboard"))
+        task.refresh_from_db()
+        self.assertTrue(task.is_deleted)
+        self.assertEqual(task.database_design, {"tables": [{"table_name": "orders"}]})
+        self.assertNotContains(
+            self.client.get(reverse("analyzer:dashboard")),
+            "remove-me.xlsx",
+        )
+        self.assertEqual(
+            self.client.get(reverse("analyzer:task_detail", args=[task.pk])).status_code,
+            404,
+        )
+
+    def test_user_cannot_delete_another_users_task(self):
+        another_user = User.objects.create_user(username="another", password="test-password")
+        upload = ExcelUpload.objects.create(
+            user=another_user,
+            file=SimpleUploadedFile("private.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=another_user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+        )
+
+        response = self.client.post(
+            reverse("analyzer:delete_task", args=[task.pk])
+        )
+
+        self.assertEqual(response.status_code, 404)
+        task.refresh_from_db()
+        self.assertFalse(task.is_deleted)
+
     def test_dashboard_requires_login(self):
         self.client.logout()
 
