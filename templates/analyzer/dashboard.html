@@ -64,7 +64,7 @@
                                 <tr class="align-top">
                                     <td class="break-all px-5 py-4 font-medium">{{ task.excel_sheet_name }}</td>
                                     <td class="px-5 py-4 text-gray-300">
-                                        {% for column in task.column_names %}
+                                        {% for column in task.schema_profile %}
                                             {{ column.column_name }}{% if not forloop.last %}, {% endif %}
                                         {% empty %}
                                             {% if task.status == "failed" %}Unavailable{% else %}Waiting for analysis{% endif %}

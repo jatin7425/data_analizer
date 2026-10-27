@@ -46,8 +46,10 @@ class AnalysisTask(models.Model):
         related_name="analysis_tasks",
     )
     excel_sheet_name = models.CharField(max_length=255)
-    column_names = models.JSONField(default=list)
-    result_json = models.JSONField(default=dict, blank=True)
+    schema_profile = models.JSONField(default=list)
+    database_design = models.JSONField(default=dict, blank=True)
+    proposed_schema = models.TextField(blank=True)
+    report_catalogue = models.JSONField(default=dict, blank=True)
     status = models.CharField(
         max_length=16,
         choices=Status.choices,

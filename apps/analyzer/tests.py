@@ -1,6 +1,8 @@
 import json
+import subprocess
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+from pathlib import Path
 
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
@@ -8,7 +10,7 @@ from django.test import TestCase, override_settings
 from django.urls import reverse
 
 from .models import AnalysisTask, ExcelUpload
-from .tasks import process_excel_upload
+from .tasks import OUTPUT_MARKER, process_excel_upload
 
 
 class ExcelUploadTests(TestCase):
@@ -76,28 +78,35 @@ class ExcelUploadTests(TestCase):
             excel_sheet_name=upload.filename,
         )
 
-        def write_processor_outputs(command, *, env, **kwargs):
-            output_files = {
-                env["SCHEMA_PROFILE_FILE"]: [{"column_name": "SKU", "pandas_dtype": "object"}],
-                env["DATABASE_DESIGN_FILE"]: {"tables": []},
-                env["PROPOSED_SCHEMA_FILE"]: "CREATE TABLE inventory ();",
-                env["REPORT_CATALOGUE_FILE"]: {"reports": []},
+        def return_processor_outputs(command, *, env, **kwargs):
+            output_payload = {
+                "schema_profile": [{"column_name": "SKU", "pandas_dtype": "object"}],
+                "database_design": {"tables": []},
+                "proposed_schema": "CREATE TABLE inventory ();",
+                "report_catalogue": {"reports": []},
             }
-            for path, content in output_files.items():
-                with open(path, "w", encoding="utf-8") as output_file:
-                    if path.endswith(".json"):
-                        json.dump(content, output_file)
-                    else:
-                        output_file.write(content)
+            self.assertEqual(env["ANALYZER_OUTPUT_TO_DATABASE"], "1")
+            self.assertNotIn("SCHEMA_PROFILE_FILE", env)
+            self.assertEqual(
+                {path.name for path in Path(kwargs["cwd"]).iterdir()},
+                {"inventory.xlsx"},
+            )
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                stdout=f"Processor complete\n{OUTPUT_MARKER}{json.dumps(output_payload)}",
+                stderr="",
+            )
 
-        run_processor.side_effect = write_processor_outputs
+        run_processor.side_effect = return_processor_outputs
         process_excel_upload.apply(args=(task.pk,), throw=True)
 
         task.refresh_from_db()
         self.assertEqual(task.status, AnalysisTask.Status.COMPLETED)
-        self.assertEqual(task.column_names[0]["column_name"], "SKU")
-        self.assertEqual(task.result_json["database_design"], {"tables": []})
-        self.assertEqual(task.result_json["proposed_schema"], "CREATE TABLE inventory ();")
+        self.assertEqual(task.schema_profile[0]["column_name"], "SKU")
+        self.assertEqual(task.database_design, {"tables": []})
+        self.assertEqual(task.proposed_schema, "CREATE TABLE inventory ();")
+        self.assertEqual(task.report_catalogue, {"reports": []})
 
     @patch("apps.analyzer.tasks.subprocess.run", side_effect=RuntimeError("Ollama is unavailable"))
     def test_worker_records_failed_status(self, run_processor):

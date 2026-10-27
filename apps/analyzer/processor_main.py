@@ -22,6 +22,27 @@ OUTPUT_JSON = os.getenv("DATABASE_DESIGN_FILE", "database_design.json")
 OUTPUT_SQL = os.getenv("PROPOSED_SCHEMA_FILE", "proposed_schema.sql")
 OUTPUT_PROFILE = os.getenv("SCHEMA_PROFILE_FILE", "excel_schema_profile.json")
 OUTPUT_REPORTS = os.getenv("REPORT_CATALOGUE_FILE", "report_catalogue.json")
+OUTPUT_TO_DATABASE = os.getenv("ANALYZER_OUTPUT_TO_DATABASE") == "1"
+DATABASE_OUTPUT_MARKER = "ANALYZER_DATABASE_OUTPUT:"
+database_outputs = {}
+
+
+def save_json_output(path, value):
+    if OUTPUT_TO_DATABASE:
+        database_outputs[os.path.basename(path)] = value
+        return
+
+    with open(path, "w", encoding="utf-8") as file:
+        json.dump(value, file, indent=2, ensure_ascii=False)
+
+
+def save_text_output(path, value):
+    if OUTPUT_TO_DATABASE:
+        database_outputs[os.path.basename(path)] = value
+        return
+
+    with open(path, "w", encoding="utf-8") as file:
+        file.write(value)
 
 
 # ============================================================
@@ -86,16 +107,13 @@ def build_schema_profile(dataframe):
 
 
 schema_profile = build_schema_profile(df)
+save_json_output(OUTPUT_PROFILE, schema_profile)
 
-with open(OUTPUT_PROFILE, "w", encoding="utf-8") as file:
-    json.dump(
-        schema_profile,
-        file,
-        indent=2,
-        ensure_ascii=False
-    )
-
-print("Schema profile saved:", OUTPUT_PROFILE)
+print(
+    "Schema profile passed to database writer."
+    if OUTPUT_TO_DATABASE
+    else f"Schema profile saved: {OUTPUT_PROFILE}"
+)
 print(json.dumps(schema_profile, indent=2, ensure_ascii=False))
 
 
@@ -295,16 +313,13 @@ def safe_identifier(name):
 
 
 db_design = parse_llm_json(llm_output)
+save_json_output(OUTPUT_JSON, db_design)
 
-with open(OUTPUT_JSON, "w", encoding="utf-8") as file:
-    json.dump(
-        db_design,
-        file,
-        indent=2,
-        ensure_ascii=False
-    )
-
-print("Database design saved:", OUTPUT_JSON)
+print(
+    "Database design passed to database writer."
+    if OUTPUT_TO_DATABASE
+    else f"Database design saved: {OUTPUT_JSON}"
+)
 
 print("\nProposed tables:")
 
@@ -503,9 +518,7 @@ def generate_postgres_ddl(design):
 
 
 ddl = generate_postgres_ddl(db_design)
-
-with open(OUTPUT_SQL, "w", encoding="utf-8") as file:
-    file.write(ddl)
+save_text_output(OUTPUT_SQL, ddl)
 
 print("\nGenerated SQL:")
 print(ddl)
@@ -595,27 +608,42 @@ report_catalogue = suggest_reports(
     db_design
 )
 
-with open(
-    OUTPUT_REPORTS,
-    "w",
-    encoding="utf-8"
-) as file:
-    json.dump(
-        report_catalogue,
-        file,
-        indent=2,
-        ensure_ascii=False
-    )
+save_json_output(OUTPUT_REPORTS, report_catalogue)
 
-print("Suggested reports saved to ", OUTPUT_REPORTS)
+print(
+    "Report catalogue passed to database writer."
+    if OUTPUT_TO_DATABASE
+    else f"Suggested reports saved to {OUTPUT_REPORTS}"
+)
 
-print("\nFiles generated successfully:")
-print(f"1. {OUTPUT_PROFILE}")
-print(f"2. {OUTPUT_JSON}")
-print(f"3. {OUTPUT_SQL}")
-print(f"4. {OUTPUT_REPORTS}")
+if OUTPUT_TO_DATABASE:
+    print("\nGenerated outputs returned for database storage.")
+else:
+    print("\nFiles generated successfully:")
+    print(f"1. {OUTPUT_PROFILE}")
+    print(f"2. {OUTPUT_JSON}")
+    print(f"3. {OUTPUT_SQL}")
+    print(f"4. {OUTPUT_REPORTS}")
 
 print(
     "\nReview the proposed tables, data types, primary keys, "
     "and relationships before executing the SQL."
 )
+
+if OUTPUT_TO_DATABASE:
+    output_names = {
+        "schema_profile": OUTPUT_PROFILE,
+        "database_design": OUTPUT_JSON,
+        "proposed_schema": OUTPUT_SQL,
+        "report_catalogue": OUTPUT_REPORTS,
+    }
+    print(
+        DATABASE_OUTPUT_MARKER
+        + json.dumps(
+            {
+                key: database_outputs[os.path.basename(filename)]
+                for key, filename in output_names.items()
+            },
+            ensure_ascii=False,
+        )
+    )

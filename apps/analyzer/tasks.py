@@ -11,6 +11,8 @@ from django.conf import settings
 
 from .models import AnalysisTask
 
+OUTPUT_MARKER = "ANALYZER_DATABASE_OUTPUT:"
+
 
 @shared_task(bind=True, name="apps.analyzer.process_excel_upload")
 def process_excel_upload(self, analysis_task_id):
@@ -37,24 +39,15 @@ def process_excel_upload(self, analysis_task_id):
             finally:
                 analysis_task.upload.file.close()
 
-            output_paths = {
-                "profile": work_path / "excel_schema_profile.json",
-                "database_design": work_path / "database_design.json",
-                "schema": work_path / "proposed_schema.sql",
-                "report_catalogue": work_path / "report_catalogue.json",
-            }
             environment = os.environ.copy()
             environment.update(
                 {
                     "SOURCE_EXCEL_FILE": str(input_path),
                     "OLLAMA_MODEL": settings.ANALYZER_OLLAMA_MODEL,
-                    "SCHEMA_PROFILE_FILE": str(output_paths["profile"]),
-                    "DATABASE_DESIGN_FILE": str(output_paths["database_design"]),
-                    "PROPOSED_SCHEMA_FILE": str(output_paths["schema"]),
-                    "REPORT_CATALOGUE_FILE": str(output_paths["report_catalogue"]),
+                    "ANALYZER_OUTPUT_TO_DATABASE": "1",
                 }
             )
-            subprocess.run(
+            processor_result = subprocess.run(
                 [sys.executable, str(Path(__file__).with_name("processor_main.py"))],
                 cwd=workdir,
                 env=environment,
@@ -64,27 +57,23 @@ def process_excel_upload(self, analysis_task_id):
                 timeout=settings.ANALYZER_TASK_TIMEOUT,
             )
 
-            column_profile = json.loads(
-                output_paths["profile"].read_text(encoding="utf-8")
-            )
-            result = {
-                "database_design": json.loads(
-                    output_paths["database_design"].read_text(encoding="utf-8")
-                ),
-                "proposed_schema": output_paths["schema"].read_text(encoding="utf-8"),
-                "report_catalogue": json.loads(
-                    output_paths["report_catalogue"].read_text(encoding="utf-8")
-                ),
-            }
+        _, marker, serialized_outputs = processor_result.stdout.rpartition(OUTPUT_MARKER)
+        if not marker:
+            raise ValueError("Processor did not return its generated outputs.")
+        outputs = json.loads(serialized_outputs.strip())
 
-        analysis_task.column_names = column_profile
-        analysis_task.result_json = result
+        analysis_task.schema_profile = outputs["schema_profile"]
+        analysis_task.database_design = outputs["database_design"]
+        analysis_task.proposed_schema = outputs["proposed_schema"]
+        analysis_task.report_catalogue = outputs["report_catalogue"]
         analysis_task.status = AnalysisTask.Status.COMPLETED
         analysis_task.error_message = ""
         analysis_task.save(
             update_fields=[
-                "column_names",
-                "result_json",
+                "schema_profile",
+                "database_design",
+                "proposed_schema",
+                "report_catalogue",
                 "status",
                 "error_message",
                 "updated_at",

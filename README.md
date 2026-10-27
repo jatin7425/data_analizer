@@ -1,6 +1,6 @@
 # data_analizer
 
-Analyze uploaded Excel files asynchronously. Each upload creates an `AnalysisTask` row in the `task` table. The worker stores the column profile and generated schema/report results on that row and updates its status.
+Analyze uploaded Excel files asynchronously. Each upload creates an `AnalysisTask` row in the `task` table. The worker stores the schema profile, database design, proposed SQL schema, and report catalogue in separate columns on that row and updates its status. When run by the worker, the processor returns these results directly to Django for database storage rather than writing generated artifact files.
 
 ## Run the application and worker
 
@@ -26,4 +26,4 @@ python manage.py runserver
 celery -A data_analizer worker --loglevel=info
 ```
 
-The dashboard refreshes while tasks are pending or processing. A task records its owner, uploaded workbook name, per-column JSON profile, generated database design/schema/report catalogue, status, and `is_deleted` flag. Set `CELERY_BROKER_URL`, `OLLAMA_MODEL`, or `ANALYZER_TASK_TIMEOUT` in the environment to override the defaults.
+The dashboard refreshes while tasks are pending or processing. A task records its owner, uploaded workbook name, schema profile, database design, proposed SQL schema, report catalogue, status, and `is_deleted` flag. Set `CELERY_BROKER_URL`, `OLLAMA_MODEL`, or `ANALYZER_TASK_TIMEOUT` in the environment to override the defaults.
