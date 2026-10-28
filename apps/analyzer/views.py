@@ -53,25 +53,6 @@ def task_detail(request, task_id):
     schema_tables = task.database_design.get("tables", [])
     reports = task.report_catalogue.get("reports", [])
     data_imports = task.data_imports.all()
-    order_mapping = next(
-        (
-            table
-            for table in task.mapping_plan.get("tables", [])
-            if table.get("table_name") == "orders"
-        ),
-        {},
-    )
-    can_use_source_index = (
-        bool(order_mapping)
-        and any(
-            str(column.get("column_name", "")).strip() == "index"
-            for column in task.schema_profile
-        )
-        and not any(
-            column.get("include") and column.get("primary_key")
-            for column in order_mapping.get("columns", [])
-        )
-    )
     return render(
         request,
         "analyzer/task_detail.html",
@@ -83,7 +64,6 @@ def task_detail(request, task_id):
             "has_active_imports": task.data_imports.filter(
                 status__in=[DataImport.Status.PENDING, DataImport.Status.PROCESSING]
             ).exists(),
-            "can_use_source_index": can_use_source_index,
             "database_connection_form": DatabaseConnectionForm(
                 initial={
                     "host": task.target_db_host,
@@ -92,11 +72,7 @@ def task_detail(request, task_id):
                     "database_name": task.target_db_name,
                 }
             ),
-            "data_import_form": DataImportForm(
-                initial={
-                    "use_source_index_for_orders": can_use_source_index,
-                }
-            ),
+            "data_import_form": DataImportForm(),
         },
     )
 
@@ -209,9 +185,6 @@ def upload_data_import(request, task_id):
     data_import = DataImport.objects.create(
         analysis_task=task,
         file=form.cleaned_data["file"],
-        use_source_index_for_orders=form.cleaned_data[
-            "use_source_index_for_orders"
-        ],
     )
     transaction.on_commit(
         lambda import_id=data_import.pk: enqueue_data_import_task(import_id)

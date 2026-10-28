@@ -336,7 +336,7 @@
                     {% if task.database_status == "completed" %}
                         <div class="mt-8 border-t border-slate-700 pt-6">
                             <h3 class="text-xl font-semibold">Validate and import another Excel sheet</h3>
-                            <p class="mt-2 text-sm text-gray-300">The first sheet must have the same column names and inferred data types as the original workbook. Column order may differ. Rows are upserted using the mapped primary keys.</p>
+                            <p class="mt-2 text-sm text-gray-300">The first sheet must have the same column names and inferred data types as the original workbook. Column order may differ. Rows use mapped primary keys when available; otherwise, all mapped fields form a composite upsert key.</p>
                             {% if not task.target_db_password_encrypted %}
                                 <p class="mt-4 rounded-lg border border-amber-800 bg-amber-950/30 px-4 py-3 text-amber-100">Update the database connection and run setup again to enable imports for this task.</p>
                             {% else %}
@@ -346,12 +346,6 @@
                                         <label for="{{ data_import_form.file.id_for_label }}" class="mb-1 block text-sm text-gray-300">Excel file (.xls or .xlsx)</label>
                                         {{ data_import_form.file }}
                                     </div>
-                                    {% if can_use_source_index %}
-                                        <label class="flex items-center gap-3 text-sm text-gray-300 md:col-span-2">
-                                            {{ data_import_form.use_source_index_for_orders }}
-                                            <span>Use the Excel <strong>index</strong> column as the <strong>orders</strong> upsert key. This adds a <code>source_index</code> column with a unique index to PostgreSQL.</span>
-                                        </label>
-                                    {% endif %}
                                     <div class="flex items-end">
                                         <button type="submit" class="rounded-lg bg-indigo-600 px-5 py-2.5 font-semibold hover:bg-indigo-500">Validate schema and upsert</button>
                                     </div>

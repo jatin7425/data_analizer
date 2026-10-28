@@ -136,7 +136,6 @@ class DataImport(models.Model):
         choices=Status.choices,
         default=Status.PENDING,
     )
-    use_source_index_for_orders = models.BooleanField(default=False)
     schema_mismatch = models.JSONField(default=dict, blank=True)
     result = models.JSONField(default=dict, blank=True)
     error_message = models.TextField(blank=True)

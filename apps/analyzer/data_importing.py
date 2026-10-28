@@ -1,5 +1,4 @@
 import re
-from copy import deepcopy
 from hashlib import sha256
 
 import pandas as pd
@@ -64,55 +63,8 @@ def _column_identifier(value, context):
     return value
 
 
-def configure_source_index_key(mapping_plan, dataframe):
-    if "index" not in dataframe.columns:
-        raise ValueError(
-            'The uploaded Excel sheet has no "index" column for the orders key.'
-        )
-    index_values = dataframe["index"]
-    if index_values.isna().any():
-        raise ValueError('The Excel "index" column contains blank values.')
-    if not index_values.is_unique:
-        raise ValueError('The Excel "index" column must contain unique values.')
-    if not pd.api.types.is_integer_dtype(index_values.dtype):
-        raise ValueError('The Excel "index" column must contain integer values.')
-
-    configured_plan = deepcopy(mapping_plan)
-    order_table = next(
-        (
-            table
-            for table in configured_plan.get("tables", [])
-            if table.get("table_name") == "orders"
-        ),
-        None,
-    )
-    if order_table is None:
-        raise ValueError(
-            'The saved mapping plan has no "orders" table for the source index key.'
-        )
-    columns = order_table.get("columns")
-    if not isinstance(columns, list):
-        raise ValueError('The saved "orders" mapping has invalid columns.')
-    if any(column.get("include") and column.get("primary_key") for column in columns):
-        raise ValueError(
-            'The "orders" table already has a mapped primary key; '
-            "do not also use the source index key."
-        )
-    if any(column.get("target_column") == "source_index" for column in columns):
-        raise ValueError(
-            'The saved "orders" mapping already contains "source_index".'
-        )
-
-    columns.append(
-        {
-            "target_column": "source_index",
-            "source_columns": ["index"],
-            "include": True,
-            "primary_key": True,
-        }
-    )
-    order_table["ensure_source_index_unique"] = True
-    return configured_plan
+def _default_upsert_key(mapped_columns):
+    return list(mapped_columns)
 
 
 def _prepare_tables(mapping_plan, dataframe):
@@ -157,21 +109,29 @@ def _prepare_tables(mapping_plan, dataframe):
                         "source-backed Excel mapping."
                     )
                 primary_keys.append(target_column)
+        inferred_key = False
         if not primary_keys:
-            raise ValueError(
-                f"Table {table_name!r} has no source-backed primary key for upsert."
-            )
+            primary_keys = _default_upsert_key(sources)
+            inferred_key = bool(primary_keys)
+            if not inferred_key:
+                raise ValueError(
+                    f"Table {table_name!r} has no source-backed primary key or "
+                    "mapped columns to use as an upsert key."
+                )
+            key_sources = [sources[column] for column in primary_keys]
+            if dataframe[key_sources].isna().any().any():
+                raise ValueError(
+                    f"Table {table_name!r} has blank values in the inferred "
+                    f"composite upsert key {primary_keys}."
+                )
         if not sources:
             raise ValueError(f"Table {table_name!r} has no mapped Excel columns.")
 
         prepared[table_name] = {
             "columns": sources,
             "primary_keys": primary_keys,
+            "ensure_upsert_key_unique": inferred_key,
             "foreign_keys": table.get("foreign_keys") or [],
-            "ensure_source_index_unique": table.get(
-                "ensure_source_index_unique",
-                False,
-            ),
         }
 
     for table_name, table in prepared.items():
@@ -275,23 +235,43 @@ def upsert_dataframe(*, connection, dataframe, mapping_plan):
             for table_name, table in tables:
                 target_columns = list(table["columns"])
                 conflict_columns = table["primary_keys"]
-                if table["ensure_source_index_unique"]:
+                if table["ensure_upsert_key_unique"]:
                     cursor.execute(
-                        sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} BIGINT").format(
+                        sql.SQL(
+                            "SELECT {} FROM {} GROUP BY {} "
+                            "HAVING COUNT(*) > 1 LIMIT 1"
+                        ).format(
+                            sql.SQL(", ").join(
+                                sql.Identifier(column)
+                                for column in conflict_columns
+                            ),
                             sql.Identifier("public", table_name),
-                            sql.Identifier("source_index"),
+                            sql.SQL(", ").join(
+                                sql.Identifier(column)
+                                for column in conflict_columns
+                            ),
                         )
                     )
+                    if cursor.fetchone() is not None:
+                        raise ValueError(
+                            f"Existing rows in {table_name!r} contain duplicate "
+                            f"values for inferred upsert key {conflict_columns}. "
+                            "Resolve those duplicates before importing."
+                        )
+                    key_hash = sha256(
+                        f"{table_name}:{','.join(conflict_columns)}".encode("utf-8")
+                    ).hexdigest()[:16]
                     index_name = (
-                        "analyzer_upsert_"
-                        f"{sha256(table_name.encode('utf-8')).hexdigest()[:16]}"
-                        "_source_index_uq"
+                        f"analyzer_upsert_{key_hash}_key_uq"
                     )
                     cursor.execute(
                         sql.SQL("CREATE UNIQUE INDEX IF NOT EXISTS {} ON {} ({})").format(
                             sql.Identifier(index_name),
                             sql.Identifier("public", table_name),
-                            sql.Identifier("source_index"),
+                            sql.SQL(", ").join(
+                                sql.Identifier(column)
+                                for column in conflict_columns
+                            ),
                         )
                     )
                 updates = [

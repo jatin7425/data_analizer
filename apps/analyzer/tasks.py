@@ -13,7 +13,6 @@ from django.conf import settings
 from .database_provisioning import ensure_database_and_schema
 from .data_importing import (
     compare_schema,
-    configure_source_index_key,
     load_dataframe,
 )
 from .models import AnalysisTask, DataImport
@@ -134,10 +133,6 @@ def import_excel_to_database(self, import_id):
         if dataframe.empty:
             raise ValueError("The uploaded Excel sheet contains no data rows.")
 
-        mapping_plan = analysis_task.mapping_plan
-        if data_import.use_source_index_for_orders:
-            mapping_plan = configure_source_index_key(mapping_plan, dataframe)
-
         password = decrypt_database_password(
             analysis_task.target_db_password_encrypted
         )
@@ -152,7 +147,7 @@ def import_excel_to_database(self, import_id):
                     "password": password,
                     "connect_timeout": 10,
                 },
-                mapping_plan=mapping_plan,
+                mapping_plan=analysis_task.mapping_plan,
             )
         }
         data_import.status = DataImport.Status.COMPLETED

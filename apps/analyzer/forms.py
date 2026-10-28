@@ -78,8 +78,3 @@ class DataImportForm(forms.Form):
             }
         ),
     )
-    use_source_index_for_orders = forms.BooleanField(
-        required=False,
-        label='Use the Excel "index" column as the orders upsert key',
-        initial=True,
-    )

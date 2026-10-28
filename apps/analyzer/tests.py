@@ -15,7 +15,6 @@ from cryptography.fernet import Fernet, InvalidToken
 from .database_provisioning import normalize_postgres_type
 from .data_importing import (
     compare_schema,
-    configure_source_index_key,
     upsert_dataframe,
 )
 from .models import AnalysisTask, DataImport, ExcelUpload
@@ -629,79 +628,40 @@ class ExcelUploadTests(TestCase):
             (2, "second"),
         )
 
-    def test_source_index_key_is_validated_and_added_to_orders_mapping(self):
+    def test_upsert_uses_all_mapped_columns_when_schema_has_no_source_key(self):
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        cursor = MagicMock()
+        cursor.fetchone.return_value = None
+        connection.cursor.return_value.__enter__.return_value = cursor
         dataframe = pd.DataFrame(
             {
-                "index": pd.Series([10, 11], dtype="int64"),
-                "Order ID": ["A", "B"],
+                "Input Alpha": ["same", "same"],
+                "Input Beta": ["first", "second"],
             }
         )
         mapping_plan = {
             "tables": [
                 {
-                    "table_name": "orders",
+                    "table_name": "arbitrary_records",
                     "columns": [
                         {
-                            "target_column": "order_id",
-                            "source_columns": ["Order ID"],
+                            "target_column": "target_alpha",
+                            "source_columns": ["Input Alpha"],
                             "include": True,
                             "primary_key": False,
-                        }
+                        },
+                        {
+                            "target_column": "target_beta",
+                            "source_columns": ["Input Beta"],
+                            "include": True,
+                            "primary_key": False,
+                        },
                     ],
                     "foreign_keys": [],
                 }
             ]
         }
-
-        configured_plan = configure_source_index_key(mapping_plan, dataframe)
-        configured_orders = configured_plan["tables"][0]
-
-        self.assertEqual(len(mapping_plan["tables"][0]["columns"]), 1)
-        self.assertTrue(configured_orders["ensure_source_index_unique"])
-        self.assertEqual(
-            configured_orders["columns"][-1],
-            {
-                "target_column": "source_index",
-                "source_columns": ["index"],
-                "include": True,
-                "primary_key": True,
-            },
-        )
-
-        duplicate_index = dataframe.assign(index=[10, 10])
-        with self.assertRaisesRegex(ValueError, "must contain unique values"):
-            configure_source_index_key(mapping_plan, duplicate_index)
-
-    def test_source_index_upsert_adds_column_and_unique_index(self):
-        connection = MagicMock()
-        connection.__enter__.return_value = connection
-        cursor = MagicMock()
-        connection.cursor.return_value.__enter__.return_value = cursor
-        dataframe = pd.DataFrame(
-            {
-                "index": pd.Series([10], dtype="int64"),
-                "Order ID": ["A"],
-            }
-        )
-        mapping_plan = configure_source_index_key(
-            {
-                "tables": [
-                    {
-                        "table_name": "orders",
-                        "columns": [
-                            {
-                                "target_column": "order_id",
-                                "source_columns": ["Order ID"],
-                                "include": True,
-                                "primary_key": False,
-                            }
-                        ],
-                        "foreign_keys": [],
-                    }
-                ]
-            },
-            dataframe,
-        )
 
         result = upsert_dataframe(
             connection=connection,
@@ -709,19 +669,26 @@ class ExcelUploadTests(TestCase):
             mapping_plan=mapping_plan,
         )
 
-        self.assertEqual(result, [{"table": "orders", "rows_processed": 1}])
-        self.assertEqual(cursor.execute.call_count, 3)
+        self.assertEqual(result, [{"table": "arbitrary_records", "rows_processed": 2}])
+        self.assertEqual(cursor.execute.call_count, 4)
+        index_statement = cursor.execute.call_args_list[1].args[0]
+        self.assertTrue(index_statement.seq[0].string.startswith("CREATE UNIQUE INDEX"))
+        upsert_statement = cursor.execute.call_args_list[2].args[0]
         self.assertTrue(
-            cursor.execute.call_args_list[0].args[0].seq[0].string.startswith(
-                "ALTER TABLE"
+            any(
+                "ON CONFLICT" in getattr(fragment, "string", "")
+                for fragment in upsert_statement.seq
             )
         )
-        self.assertTrue(
-            cursor.execute.call_args_list[1].args[0].seq[0].string.startswith(
-                "CREATE UNIQUE INDEX"
-            )
+        self.assertEqual(mapping_plan["tables"][0]["columns"][0]["primary_key"], False)
+        self.assertEqual(
+            cursor.execute.call_args_list[2].args[1],
+            ("same", "first"),
         )
-        self.assertEqual(cursor.execute.call_args_list[-1].args[1], ("A", 10))
+        self.assertEqual(
+            cursor.execute.call_args_list[3].args[1],
+            ("same", "second"),
+        )
 
     def test_upsert_resolves_mapped_foreign_keys_after_parent_rows(self):
         connection = MagicMock()
@@ -836,14 +803,6 @@ class ExcelUploadTests(TestCase):
             target_db_password_encrypted=encrypt_database_password("password"),
         )
 
-        detail_response = self.client.get(
-            reverse("analyzer:task_detail", args=[task.pk])
-        )
-        self.assertRegex(
-            detail_response.content.decode(),
-            r'<input[^>]*name="use_source_index_for_orders"[^>]*checked',
-        )
-
         with patch("apps.analyzer.views.import_excel_to_database.delay") as enqueue:
             enqueue.return_value.id = "excel-import-id"
             with self.captureOnCommitCallbacks(execute=True):
@@ -858,7 +817,6 @@ class ExcelUploadTests(TestCase):
                                 "spreadsheetml.sheet"
                             ),
                         ),
-                        "use_source_index_for_orders": "on",
                     },
                 )
 
@@ -868,7 +826,6 @@ class ExcelUploadTests(TestCase):
         )
         data_import = DataImport.objects.get(analysis_task=task)
         self.assertEqual(data_import.status, DataImport.Status.PENDING)
-        self.assertTrue(data_import.use_source_index_for_orders)
         self.assertEqual(data_import.celery_task_id, "excel-import-id")
         enqueue.assert_called_once_with(data_import.pk)
 
