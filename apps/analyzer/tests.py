@@ -1,9 +1,11 @@
 import json
 import subprocess
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from pathlib import Path
 
+import psycopg2
+import pandas as pd
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -11,7 +13,12 @@ from django.urls import reverse
 from cryptography.fernet import Fernet, InvalidToken
 
 from .database_provisioning import normalize_postgres_type
-from .models import AnalysisTask, ExcelUpload
+from .data_importing import (
+    compare_schema,
+    configure_source_index_key,
+    upsert_dataframe,
+)
+from .models import AnalysisTask, DataImport, ExcelUpload
 from .security import decrypt_database_password, encrypt_database_password
 from .tasks import (
     OUTPUT_MARKER,
@@ -421,8 +428,70 @@ class ExcelUploadTests(TestCase):
         self.assertEqual(task.database_celery_task_id, "database-celery-id")
 
     @override_settings(ANALYZER_CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode())
+    def test_completed_database_setup_offers_and_accepts_connection_update(self):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("database.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            mapping_status=AnalysisTask.MappingStatus.COMPLETED,
+            database_status=AnalysisTask.DatabaseStatus.COMPLETED,
+            target_db_host="db.example.test",
+            target_db_port=5432,
+            target_db_user="analyst",
+            target_db_name="sales_reporting",
+        )
+
+        response = self.client.get(reverse("analyzer:task_detail", args=[task.pk]))
+
+        self.assertContains(response, "Update database connection")
+        self.assertContains(response, "Update connection and apply schema")
+        self.assertContains(response, 'value="db.example.test"')
+        self.assertContains(response, 'value="analyst"')
+        self.assertContains(response, 'value="sales_reporting"')
+        self.assertNotContains(response, 'name="password" value=')
+
+        with patch("apps.analyzer.views.provision_database.delay") as enqueue:
+            enqueue.return_value.id = "updated-database-celery-id"
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    reverse("analyzer:setup_database", args=[task.pk]),
+                    {
+                        "host": "new-db.example.test",
+                        "port": "5433",
+                        "username": "updated-analyst",
+                        "password": "new-password",
+                        "database_name": "updated_reporting",
+                    },
+                )
+
+        self.assertRedirects(
+            response,
+            reverse("analyzer:task_detail", args=[task.pk]),
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.database_status, AnalysisTask.DatabaseStatus.PENDING)
+        self.assertEqual(task.target_db_host, "new-db.example.test")
+        self.assertEqual(task.target_db_port, 5433)
+        self.assertEqual(task.target_db_user, "updated-analyst")
+        self.assertEqual(task.target_db_name, "updated_reporting")
+        self.assertEqual(
+            decrypt_database_password(task.target_db_password_encrypted),
+            "new-password",
+        )
+        enqueue.assert_called_once_with(task.pk)
+
+    @override_settings(ANALYZER_CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode())
     @patch("apps.analyzer.tasks.ensure_database_and_schema")
-    def test_database_worker_stores_result_and_clears_password(self, ensure_database):
+    def test_database_worker_stores_result_and_retains_encrypted_password(
+        self,
+        ensure_database,
+    ):
         upload = ExcelUpload.objects.create(
             user=self.user,
             file=SimpleUploadedFile("database.xlsx", b"spreadsheet"),
@@ -457,7 +526,10 @@ class ExcelUploadTests(TestCase):
         self.assertEqual(task.database_status, AnalysisTask.DatabaseStatus.COMPLETED)
         self.assertEqual(task.database_result["tables_created"], ["orders"])
         self.assertEqual(task.database_result["host"], "db.example.test")
-        self.assertEqual(task.target_db_password_encrypted, "")
+        self.assertEqual(
+            decrypt_database_password(task.target_db_password_encrypted),
+            "temporary-password",
+        )
         ensure_database.assert_called_once_with(
             host="db.example.test",
             port=5432,
@@ -466,6 +538,460 @@ class ExcelUploadTests(TestCase):
             database_name="sales_reporting",
             database_design=task.database_design,
         )
+
+    def test_import_schema_comparison_checks_names_and_types_not_order(self):
+        dataframe = pd.DataFrame(
+            {
+                "Customer": pd.Series(["Ana"], dtype="object"),
+                "Quantity": pd.Series([1], dtype="int64"),
+            }
+        )
+        expected_profile = [
+            {"column_name": "Quantity", "pandas_dtype": "int64"},
+            {"column_name": "Customer", "pandas_dtype": "object"},
+        ]
+
+        self.assertEqual(
+            compare_schema(dataframe, expected_profile),
+            {
+                "missing_columns": [],
+                "unexpected_columns": [],
+                "type_mismatches": [],
+                "duplicate_columns": [],
+            },
+        )
+
+        changed_types = dataframe.astype({"Quantity": "float64"})
+        mismatch = compare_schema(changed_types, expected_profile)
+        self.assertEqual(
+            mismatch["type_mismatches"],
+            [{"column": "Quantity", "expected": "int64", "actual": "float64"}],
+        )
+
+    def test_upsert_uses_mapping_primary_key_and_updates_conflicts(self):
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        cursor = MagicMock()
+        connection.cursor.return_value.__enter__.return_value = cursor
+        dataframe = pd.DataFrame(
+            {
+                "Item ID": pd.Series([1, 2], dtype="int64"),
+                "Description": ["first", "second"],
+            }
+        )
+        mapping_plan = {
+            "tables": [
+                {
+                    "table_name": "items",
+                    "columns": [
+                        {
+                            "target_column": "item_id",
+                            "source_columns": ["Item ID"],
+                            "include": True,
+                            "primary_key": True,
+                        },
+                        {
+                            "target_column": "description",
+                            "source_columns": ["Description"],
+                            "include": True,
+                            "primary_key": False,
+                        },
+                    ],
+                    "foreign_keys": [],
+                }
+            ]
+        }
+
+        result = upsert_dataframe(
+            connection=connection,
+            dataframe=dataframe,
+            mapping_plan=mapping_plan,
+        )
+
+        self.assertEqual(result, [{"table": "items", "rows_processed": 2}])
+        self.assertEqual(cursor.execute.call_count, 2)
+        statement, values = cursor.execute.call_args_list[0].args
+        self.assertTrue(
+            any(
+                getattr(fragment, "string", "").startswith("INSERT INTO")
+                for fragment in statement.seq
+            )
+        )
+        self.assertTrue(
+            any(
+                "ON CONFLICT" in getattr(fragment, "string", "")
+                for fragment in statement.seq
+            )
+        )
+        self.assertEqual(values, (1, "first"))
+        self.assertEqual(
+            cursor.execute.call_args_list[1].args[1],
+            (2, "second"),
+        )
+
+    def test_source_index_key_is_validated_and_added_to_orders_mapping(self):
+        dataframe = pd.DataFrame(
+            {
+                "index": pd.Series([10, 11], dtype="int64"),
+                "Order ID": ["A", "B"],
+            }
+        )
+        mapping_plan = {
+            "tables": [
+                {
+                    "table_name": "orders",
+                    "columns": [
+                        {
+                            "target_column": "order_id",
+                            "source_columns": ["Order ID"],
+                            "include": True,
+                            "primary_key": False,
+                        }
+                    ],
+                    "foreign_keys": [],
+                }
+            ]
+        }
+
+        configured_plan = configure_source_index_key(mapping_plan, dataframe)
+        configured_orders = configured_plan["tables"][0]
+
+        self.assertEqual(len(mapping_plan["tables"][0]["columns"]), 1)
+        self.assertTrue(configured_orders["ensure_source_index_unique"])
+        self.assertEqual(
+            configured_orders["columns"][-1],
+            {
+                "target_column": "source_index",
+                "source_columns": ["index"],
+                "include": True,
+                "primary_key": True,
+            },
+        )
+
+        duplicate_index = dataframe.assign(index=[10, 10])
+        with self.assertRaisesRegex(ValueError, "must contain unique values"):
+            configure_source_index_key(mapping_plan, duplicate_index)
+
+    def test_source_index_upsert_adds_column_and_unique_index(self):
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        cursor = MagicMock()
+        connection.cursor.return_value.__enter__.return_value = cursor
+        dataframe = pd.DataFrame(
+            {
+                "index": pd.Series([10], dtype="int64"),
+                "Order ID": ["A"],
+            }
+        )
+        mapping_plan = configure_source_index_key(
+            {
+                "tables": [
+                    {
+                        "table_name": "orders",
+                        "columns": [
+                            {
+                                "target_column": "order_id",
+                                "source_columns": ["Order ID"],
+                                "include": True,
+                                "primary_key": False,
+                            }
+                        ],
+                        "foreign_keys": [],
+                    }
+                ]
+            },
+            dataframe,
+        )
+
+        result = upsert_dataframe(
+            connection=connection,
+            dataframe=dataframe,
+            mapping_plan=mapping_plan,
+        )
+
+        self.assertEqual(result, [{"table": "orders", "rows_processed": 1}])
+        self.assertEqual(cursor.execute.call_count, 3)
+        self.assertTrue(
+            cursor.execute.call_args_list[0].args[0].seq[0].string.startswith(
+                "ALTER TABLE"
+            )
+        )
+        self.assertTrue(
+            cursor.execute.call_args_list[1].args[0].seq[0].string.startswith(
+                "CREATE UNIQUE INDEX"
+            )
+        )
+        self.assertEqual(cursor.execute.call_args_list[-1].args[1], ("A", 10))
+
+    def test_upsert_resolves_mapped_foreign_keys_after_parent_rows(self):
+        connection = MagicMock()
+        connection.__enter__.return_value = connection
+        cursor = MagicMock()
+        cursor.fetchall.return_value = [(42,)]
+        connection.cursor.return_value.__enter__.return_value = cursor
+        dataframe = pd.DataFrame(
+            {
+                "Product ID": pd.Series([5], dtype="int64"),
+                "Category Code": ["food"],
+            }
+        )
+        mapping_plan = {
+            "tables": [
+                {
+                    "table_name": "products",
+                    "columns": [
+                        {
+                            "target_column": "product_id",
+                            "source_columns": ["Product ID"],
+                            "include": True,
+                            "primary_key": True,
+                        },
+                        {
+                            "target_column": "category_id",
+                            "source_columns": ["Category Code"],
+                            "include": True,
+                            "primary_key": False,
+                        },
+                    ],
+                    "foreign_keys": [
+                        {
+                            "column": "category_id",
+                            "source_columns": ["Category Code"],
+                            "strategy": "lookup",
+                            "lookup_by": ["category_code"],
+                            "references_table": "categories",
+                            "references_column": "category_id",
+                        }
+                    ],
+                },
+                {
+                    "table_name": "categories",
+                    "columns": [
+                        {
+                            "target_column": "category_id",
+                            "source_columns": ["Category ID"],
+                            "include": True,
+                            "primary_key": True,
+                        },
+                        {
+                            "target_column": "category_code",
+                            "source_columns": ["Category Code"],
+                            "include": True,
+                            "primary_key": False,
+                        },
+                    ],
+                    "foreign_keys": [],
+                },
+            ]
+        }
+        dataframe["Category ID"] = pd.Series([42], dtype="int64")
+
+        result = upsert_dataframe(
+            connection=connection,
+            dataframe=dataframe,
+            mapping_plan=mapping_plan,
+        )
+
+        self.assertEqual(
+            [table["table"] for table in result],
+            ["categories", "products"],
+        )
+        self.assertEqual(
+            cursor.execute.call_args_list[-1].args[1],
+            (5, 42),
+        )
+
+    @override_settings(ANALYZER_CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode())
+    def test_import_upload_queues_for_completed_database(self):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("original.xlsx", b"original"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            mapping_status=AnalysisTask.MappingStatus.COMPLETED,
+            database_status=AnalysisTask.DatabaseStatus.COMPLETED,
+            schema_profile=[
+                {"column_name": "index", "pandas_dtype": "int64"},
+            ],
+            mapping_plan={
+                "tables": [
+                    {
+                        "table_name": "orders",
+                        "columns": [
+                            {
+                                "target_column": "order_id",
+                                "source_columns": ["Order ID"],
+                                "include": True,
+                                "primary_key": False,
+                            }
+                        ],
+                    }
+                ]
+            },
+            target_db_password_encrypted=encrypt_database_password("password"),
+        )
+
+        detail_response = self.client.get(
+            reverse("analyzer:task_detail", args=[task.pk])
+        )
+        self.assertRegex(
+            detail_response.content.decode(),
+            r'<input[^>]*name="use_source_index_for_orders"[^>]*checked',
+        )
+
+        with patch("apps.analyzer.views.import_excel_to_database.delay") as enqueue:
+            enqueue.return_value.id = "excel-import-id"
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    reverse("analyzer:upload_data_import", args=[task.pk]),
+                    {
+                        "file": SimpleUploadedFile(
+                            "next.xlsx",
+                            b"spreadsheet",
+                            content_type=(
+                                "application/vnd.openxmlformats-officedocument."
+                                "spreadsheetml.sheet"
+                            ),
+                        ),
+                        "use_source_index_for_orders": "on",
+                    },
+                )
+
+        self.assertRedirects(
+            response,
+            reverse("analyzer:task_detail", args=[task.pk]),
+        )
+        data_import = DataImport.objects.get(analysis_task=task)
+        self.assertEqual(data_import.status, DataImport.Status.PENDING)
+        self.assertTrue(data_import.use_source_index_for_orders)
+        self.assertEqual(data_import.celery_task_id, "excel-import-id")
+        enqueue.assert_called_once_with(data_import.pk)
+
+    @override_settings(ANALYZER_CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode())
+    @patch("apps.analyzer.tasks.load_dataframe")
+    @patch("apps.analyzer.tasks.pd.read_excel")
+    def test_excel_import_uses_mapping_and_encrypted_database_credentials(
+        self,
+        read_excel,
+        load_dataframe,
+    ):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("original.xlsx", b"original"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            mapping_status=AnalysisTask.MappingStatus.COMPLETED,
+            database_status=AnalysisTask.DatabaseStatus.COMPLETED,
+            schema_profile=[
+                {"column_name": "Item ID ", "pandas_dtype": "int64"},
+            ],
+            mapping_plan={
+                "tables": [
+                    {
+                        "table_name": "items",
+                        "columns": [
+                            {
+                                "target_column": "item_id",
+                                "source_columns": ["Item ID"],
+                                "include": True,
+                                "primary_key": True,
+                            }
+                        ],
+                        "foreign_keys": [],
+                    }
+                ]
+            },
+            target_db_host="db.example.test",
+            target_db_port=5432,
+            target_db_user="analyst",
+            target_db_name="inventory",
+            target_db_password_encrypted=encrypt_database_password(
+                "stored-password"
+            ),
+        )
+        data_import = DataImport.objects.create(
+            analysis_task=task,
+            file=SimpleUploadedFile("new-items.xlsx", b"import"),
+        )
+        read_excel.return_value = pd.DataFrame(
+            {"Item ID ": pd.Series([1], dtype="int64")}
+        )
+        load_dataframe.return_value = [
+            {"table": "items", "rows_processed": 1}
+        ]
+
+        from .tasks import import_excel_to_database
+
+        result = import_excel_to_database.apply(args=(data_import.pk,), throw=True)
+
+        data_import.refresh_from_db()
+        self.assertEqual(data_import.status, DataImport.Status.COMPLETED)
+        self.assertEqual(result.result["tables"][0]["rows_processed"], 1)
+        task.refresh_from_db()
+        self.assertEqual(
+            decrypt_database_password(task.target_db_password_encrypted),
+            "stored-password",
+        )
+        load_dataframe.assert_called_once()
+        self.assertEqual(
+            load_dataframe.call_args.kwargs["connection_args"]["password"],
+            "stored-password",
+        )
+        self.assertEqual(
+            list(load_dataframe.call_args.kwargs["dataframe"].columns),
+            ["Item ID"],
+        )
+
+    @patch("apps.analyzer.tasks.load_dataframe")
+    @patch("apps.analyzer.tasks.pd.read_excel")
+    def test_schema_mismatch_stops_import_before_database_write(
+        self,
+        read_excel,
+        load_dataframe,
+    ):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("original.xlsx", b"original"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            mapping_status=AnalysisTask.MappingStatus.COMPLETED,
+            database_status=AnalysisTask.DatabaseStatus.COMPLETED,
+            schema_profile=[
+                {"column_name": "Item ID", "pandas_dtype": "int64"},
+            ],
+            target_db_password_encrypted="unused-on-mismatch",
+        )
+        data_import = DataImport.objects.create(
+            analysis_task=task,
+            file=SimpleUploadedFile("wrong-schema.xlsx", b"import"),
+        )
+        read_excel.return_value = pd.DataFrame({"Product": ["widget"]})
+
+        from .tasks import import_excel_to_database
+
+        import_excel_to_database.apply(args=(data_import.pk,), throw=True)
+
+        data_import.refresh_from_db()
+        self.assertEqual(data_import.status, DataImport.Status.SCHEMA_MISMATCH)
+        self.assertEqual(data_import.schema_mismatch["missing_columns"], ["Item ID"])
+        self.assertEqual(data_import.schema_mismatch["unexpected_columns"], ["Product"])
+        self.assertIn("No database rows were changed", data_import.error_message)
+        load_dataframe.assert_not_called()
 
     def test_database_worker_records_decryption_failure_and_clears_password(self):
         upload = ExcelUpload.objects.create(
@@ -508,6 +1034,53 @@ class ExcelUploadTests(TestCase):
         self.assertFalse(form.is_valid())
         with self.assertRaises(ValueError):
             normalize_postgres_type("TEXT; DROP TABLE users")
+
+    @patch("apps.analyzer.database_provisioning.psycopg2.connect")
+    def test_database_provisioning_enters_target_connection_once(self, connect):
+        admin_connection = MagicMock()
+        admin_connection.__enter__.return_value = admin_connection
+        admin_cursor = MagicMock()
+        admin_cursor.fetchone.return_value = (1,)
+        admin_connection.cursor.return_value.__enter__.return_value = admin_cursor
+
+        target_connection = MagicMock()
+        target_connection.__enter__.side_effect = [
+            target_connection,
+            psycopg2.ProgrammingError(
+                "the connection cannot be re-entered recursively"
+            ),
+        ]
+        target_cursor = MagicMock()
+        target_cursor.fetchone.return_value = None
+        target_connection.cursor.return_value.__enter__.return_value = target_cursor
+        connect.side_effect = [admin_connection, target_connection]
+
+        from .database_provisioning import ensure_database_and_schema
+
+        result = ensure_database_and_schema(
+            host="localhost",
+            port=5432,
+            username="analyst",
+            password="password",
+            database_name="sales_reporting",
+            database_design={
+                "tables": [
+                    {
+                        "table_name": "orders",
+                        "columns": [
+                            {
+                                "column_name": "id",
+                                "postgres_type": "INTEGER",
+                                "nullable": False,
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+        self.assertEqual(target_connection.__enter__.call_count, 1)
+        self.assertEqual(result["tables_created"], ["orders"])
 
     def test_user_can_soft_delete_task_from_dashboard(self):
         upload = ExcelUpload.objects.create(

@@ -112,3 +112,40 @@ class AnalysisTask(models.Model):
 
     def __str__(self):
         return f"{self.excel_sheet_name} ({self.get_status_display()})"
+
+
+class DataImport(models.Model):
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        SCHEMA_MISMATCH = "schema_mismatch", "Schema mismatch"
+        FAILED = "failed", "Failed"
+
+    analysis_task = models.ForeignKey(
+        AnalysisTask,
+        on_delete=models.CASCADE,
+        related_name="data_imports",
+    )
+    file = models.FileField(
+        upload_to="data_imports/%Y/%m/%d/",
+        validators=[FileExtensionValidator(allowed_extensions=["xls", "xlsx"])],
+    )
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.PENDING,
+    )
+    use_source_index_for_orders = models.BooleanField(default=False)
+    schema_mismatch = models.JSONField(default=dict, blank=True)
+    result = models.JSONField(default=dict, blank=True)
+    error_message = models.TextField(blank=True)
+    celery_task_id = models.CharField(max_length=255, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+    def __str__(self):
+        return f"Import for task {self.analysis_task_id} ({self.get_status_display()})"

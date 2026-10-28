@@ -6,11 +6,17 @@ import sys
 import tempfile
 from pathlib import Path
 
+import pandas as pd
 from celery import shared_task
 from django.conf import settings
 
 from .database_provisioning import ensure_database_and_schema
-from .models import AnalysisTask
+from .data_importing import (
+    compare_schema,
+    configure_source_index_key,
+    load_dataframe,
+)
+from .models import AnalysisTask, DataImport
 from .security import decrypt_database_password
 
 OUTPUT_MARKER = "ANALYZER_DATABASE_OUTPUT:"
@@ -70,11 +76,108 @@ def provision_database(self, analysis_task_id):
         analysis_task.save(
             update_fields=["database_status", "database_error", "updated_at"]
         )
-        raise
-    finally:
         AnalysisTask.objects.filter(pk=analysis_task_id).update(
             target_db_password_encrypted=""
         )
+        raise
+
+
+@shared_task(bind=True, name="apps.analyzer.import_excel_to_database")
+def import_excel_to_database(self, import_id):
+    data_import = DataImport.objects.select_related(
+        "analysis_task",
+        "analysis_task__upload",
+    ).get(pk=import_id)
+    analysis_task = data_import.analysis_task
+    data_import.status = DataImport.Status.PROCESSING
+    data_import.error_message = ""
+    data_import.celery_task_id = self.request.id or ""
+    data_import.save(
+        update_fields=["status", "error_message", "celery_task_id", "updated_at"]
+    )
+
+    password = ""
+    try:
+        if analysis_task.review_status != AnalysisTask.ReviewStatus.APPROVED:
+            raise ValueError("The analysis must be approved before importing data.")
+        if analysis_task.mapping_status != AnalysisTask.MappingStatus.COMPLETED:
+            raise ValueError("Mapping plan generation must complete before importing data.")
+        if analysis_task.database_status != AnalysisTask.DatabaseStatus.COMPLETED:
+            raise ValueError("Database setup must complete before importing data.")
+        if not analysis_task.target_db_password_encrypted:
+            raise ValueError("Update the database connection before importing data.")
+        data_import.file.open("rb")
+        try:
+            dataframe = pd.read_excel(data_import.file, sheet_name=0)
+        finally:
+            data_import.file.close()
+        dataframe.columns = [str(column).strip() for column in dataframe.columns]
+
+        mismatch = compare_schema(dataframe, analysis_task.schema_profile)
+        if any(mismatch.values()):
+            data_import.schema_mismatch = mismatch
+            data_import.status = DataImport.Status.SCHEMA_MISMATCH
+            data_import.error_message = (
+                "The uploaded Excel schema does not match the original workbook. "
+                "No database rows were changed."
+            )
+            data_import.save(
+                update_fields=[
+                    "schema_mismatch",
+                    "status",
+                    "error_message",
+                    "updated_at",
+                ]
+            )
+            return {"status": DataImport.Status.SCHEMA_MISMATCH}
+
+        if dataframe.empty:
+            raise ValueError("The uploaded Excel sheet contains no data rows.")
+
+        mapping_plan = analysis_task.mapping_plan
+        if data_import.use_source_index_for_orders:
+            mapping_plan = configure_source_index_key(mapping_plan, dataframe)
+
+        password = decrypt_database_password(
+            analysis_task.target_db_password_encrypted
+        )
+        data_import.result = {
+            "tables": load_dataframe(
+                dataframe=dataframe,
+                connection_args={
+                    "dbname": analysis_task.target_db_name,
+                    "host": analysis_task.target_db_host,
+                    "port": analysis_task.target_db_port,
+                    "user": analysis_task.target_db_user,
+                    "password": password,
+                    "connect_timeout": 10,
+                },
+                mapping_plan=mapping_plan,
+            )
+        }
+        data_import.status = DataImport.Status.COMPLETED
+        data_import.schema_mismatch = {}
+        data_import.error_message = ""
+        data_import.save(
+            update_fields=[
+                "result",
+                "status",
+                "schema_mismatch",
+                "error_message",
+                "updated_at",
+            ]
+        )
+        return data_import.result
+    except Exception as exc:
+        data_import.status = DataImport.Status.FAILED
+        error_message = str(exc)
+        if password:
+            error_message = error_message.replace(password, "[redacted]")
+        data_import.error_message = error_message
+        data_import.save(
+            update_fields=["status", "error_message", "updated_at"]
+        )
+        raise
 
 
 @shared_task(bind=True, name="apps.analyzer.generate_mapping_plan")

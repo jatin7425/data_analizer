@@ -1,6 +1,7 @@
 import re
 
 from django import forms
+from django.core.validators import FileExtensionValidator
 
 from .models import ExcelUpload
 
@@ -63,3 +64,22 @@ class DatabaseConnectionForm(forms.Form):
                 "the first character must be a letter or underscore."
             )
         return database_name
+
+
+class DataImportForm(forms.Form):
+    file = forms.FileField(
+        validators=[
+            FileExtensionValidator(allowed_extensions=["xls", "xlsx"]),
+        ],
+        widget=forms.ClearableFileInput(
+            attrs={
+                "accept": ".xls,.xlsx",
+                "class": "w-full rounded-lg bg-slate-900 p-2.5 text-white",
+            }
+        ),
+    )
+    use_source_index_for_orders = forms.BooleanField(
+        required=False,
+        label='Use the Excel "index" column as the orders upsert key',
+        initial=True,
+    )

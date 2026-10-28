@@ -159,7 +159,8 @@ def ensure_database_and_schema(
                 except DuplicateDatabase:
                     exists = True
 
-    with psycopg2.connect(dbname=database_name, **connection_args) as target_connection:
+    target_connection = psycopg2.connect(dbname=database_name, **connection_args)
+    try:
         with target_connection:
             with target_connection.cursor() as cursor:
                 for table_name, columns in definitions:
@@ -319,6 +320,8 @@ def ensure_database_and_schema(
                         result["columns_added"].append(
                             {"table": table_name, "column": column["name"]}
                         )
+    finally:
+        target_connection.close()
 
     result["database_exists"] = not result["database_created"]
     return result

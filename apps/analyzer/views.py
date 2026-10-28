@@ -6,10 +6,15 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_POST
 
-from .forms import DatabaseConnectionForm, ExcelUploadForm
-from .models import AnalysisTask, ExcelUpload
+from .forms import DataImportForm, DatabaseConnectionForm, ExcelUploadForm
+from .models import AnalysisTask, DataImport, ExcelUpload
 from .security import encrypt_database_password
-from .tasks import generate_mapping_plan, process_excel_upload, provision_database
+from .tasks import (
+    generate_mapping_plan,
+    import_excel_to_database,
+    process_excel_upload,
+    provision_database,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +52,26 @@ def task_detail(request, task_id):
     )
     schema_tables = task.database_design.get("tables", [])
     reports = task.report_catalogue.get("reports", [])
+    data_imports = task.data_imports.all()
+    order_mapping = next(
+        (
+            table
+            for table in task.mapping_plan.get("tables", [])
+            if table.get("table_name") == "orders"
+        ),
+        {},
+    )
+    can_use_source_index = (
+        bool(order_mapping)
+        and any(
+            str(column.get("column_name", "")).strip() == "index"
+            for column in task.schema_profile
+        )
+        and not any(
+            column.get("include") and column.get("primary_key")
+            for column in order_mapping.get("columns", [])
+        )
+    )
     return render(
         request,
         "analyzer/task_detail.html",
@@ -54,12 +79,22 @@ def task_detail(request, task_id):
             "task": task,
             "schema_tables": schema_tables,
             "reports": reports,
+            "data_imports": data_imports,
+            "has_active_imports": task.data_imports.filter(
+                status__in=[DataImport.Status.PENDING, DataImport.Status.PROCESSING]
+            ).exists(),
+            "can_use_source_index": can_use_source_index,
             "database_connection_form": DatabaseConnectionForm(
                 initial={
                     "host": task.target_db_host,
                     "port": task.target_db_port or 5432,
                     "username": task.target_db_user,
                     "database_name": task.target_db_name,
+                }
+            ),
+            "data_import_form": DataImportForm(
+                initial={
+                    "use_source_index_for_orders": can_use_source_index,
                 }
             ),
         },
@@ -84,6 +119,11 @@ def setup_database(request, task_id):
         AnalysisTask.DatabaseStatus.PROCESSING,
     ]:
         messages.info(request, "Database setup is already in progress.")
+        return redirect("analyzer:task_detail", task_id=task.pk)
+    if task.data_imports.filter(
+        status__in=[DataImport.Status.PENDING, DataImport.Status.PROCESSING]
+    ).exists():
+        messages.info(request, "Wait for the current Excel import before updating the database connection.")
         return redirect("analyzer:task_detail", task_id=task.pk)
 
     form = DatabaseConnectionForm(request.POST)
@@ -127,8 +167,56 @@ def setup_database(request, task_id):
     messages.success(
         request,
         "Database setup was queued. Credentials are encrypted and the password "
-        "will be cleared after processing.",
+        "is retained encrypted for future imports.",
     )
+    return redirect("analyzer:task_detail", task_id=task.pk)
+
+
+@login_required
+@require_POST
+def upload_data_import(request, task_id):
+    task = get_object_or_404(
+        AnalysisTask.objects.filter(
+            user=request.user,
+            is_deleted=False,
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            mapping_status=AnalysisTask.MappingStatus.COMPLETED,
+            database_status=AnalysisTask.DatabaseStatus.COMPLETED,
+        ),
+        pk=task_id,
+    )
+    if not task.target_db_password_encrypted:
+        messages.error(
+            request,
+            "Update the database connection and run setup again before importing data.",
+        )
+        return redirect("analyzer:task_detail", task_id=task.pk)
+
+    if task.data_imports.filter(
+        status__in=[DataImport.Status.PENDING, DataImport.Status.PROCESSING]
+    ).exists():
+        messages.info(request, "An Excel import is already in progress.")
+        return redirect("analyzer:task_detail", task_id=task.pk)
+
+    form = DataImportForm(request.POST, request.FILES)
+    if not form.is_valid():
+        for error in form.errors.values():
+            for message in error:
+                messages.error(request, message)
+        return redirect("analyzer:task_detail", task_id=task.pk)
+
+    data_import = DataImport.objects.create(
+        analysis_task=task,
+        file=form.cleaned_data["file"],
+        use_source_index_for_orders=form.cleaned_data[
+            "use_source_index_for_orders"
+        ],
+    )
+    transaction.on_commit(
+        lambda import_id=data_import.pk: enqueue_data_import_task(import_id)
+    )
+    messages.success(request, "Excel schema validation and data import were queued.")
     return redirect("analyzer:task_detail", task_id=task.pk)
 
 
@@ -177,7 +265,14 @@ def delete_task(request, task_id):
         pk=task_id,
     )
     task.is_deleted = True
-    task.save(update_fields=["is_deleted", "updated_at"])
+    task.target_db_password_encrypted = ""
+    task.save(
+        update_fields=[
+            "is_deleted",
+            "target_db_password_encrypted",
+            "updated_at",
+        ]
+    )
     messages.success(request, f"Analysis for {task.excel_sheet_name} was removed.")
     return redirect("analyzer:dashboard")
 
@@ -254,4 +349,20 @@ def enqueue_database_task(task_id):
 
     AnalysisTask.objects.filter(pk=task_id).update(
         database_celery_task_id=queued_task.id,
+    )
+
+
+def enqueue_data_import_task(import_id):
+    try:
+        queued_task = import_excel_to_database.delay(import_id)
+    except Exception as exc:
+        logger.exception("Could not enqueue Excel data import %s", import_id)
+        DataImport.objects.filter(pk=import_id).update(
+            status=DataImport.Status.FAILED,
+            error_message=f"Could not enqueue Excel import: {exc}",
+        )
+        return
+
+    DataImport.objects.filter(pk=import_id).update(
+        celery_task_id=queued_task.id or "",
     )

@@ -59,6 +59,7 @@ df = pd.read_excel(
     xls,
     sheet_name=SHEET_NAME
 )
+df.columns = [str(column).strip() for column in df.columns]
 
 print("Total rows:", len(df))
 print("Total columns:", len(df.columns))
