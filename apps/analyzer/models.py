@@ -35,6 +35,25 @@ class AnalysisTask(models.Model):
         COMPLETED = "completed", "Completed"
         FAILED = "failed", "Failed"
 
+    class ReviewStatus(models.TextChoices):
+        PENDING = "pending", "Awaiting review"
+        APPROVED = "approved", "Approved"
+        REJECTED = "rejected", "Rejected"
+
+    class MappingStatus(models.TextChoices):
+        NOT_STARTED = "not_started", "Not started"
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
+    class DatabaseStatus(models.TextChoices):
+        NOT_STARTED = "not_started", "Not started"
+        PENDING = "pending", "Pending"
+        PROCESSING = "processing", "Processing"
+        COMPLETED = "completed", "Completed"
+        FAILED = "failed", "Failed"
+
     user = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.CASCADE,
@@ -50,6 +69,32 @@ class AnalysisTask(models.Model):
     database_design = models.JSONField(default=dict, blank=True)
     proposed_schema = models.TextField(blank=True)
     report_catalogue = models.JSONField(default=dict, blank=True)
+    review_status = models.CharField(
+        max_length=16,
+        choices=ReviewStatus.choices,
+        default=ReviewStatus.PENDING,
+    )
+    mapping_status = models.CharField(
+        max_length=16,
+        choices=MappingStatus.choices,
+        default=MappingStatus.NOT_STARTED,
+    )
+    mapping_plan = models.JSONField(default=dict, blank=True)
+    mapping_error = models.TextField(blank=True)
+    mapping_celery_task_id = models.CharField(max_length=255, blank=True)
+    target_db_host = models.CharField(max_length=255, blank=True)
+    target_db_port = models.PositiveIntegerField(null=True, blank=True)
+    target_db_user = models.CharField(max_length=255, blank=True)
+    target_db_name = models.CharField(max_length=63, blank=True)
+    target_db_password_encrypted = models.TextField(blank=True)
+    database_status = models.CharField(
+        max_length=16,
+        choices=DatabaseStatus.choices,
+        default=DatabaseStatus.NOT_STARTED,
+    )
+    database_result = models.JSONField(default=dict, blank=True)
+    database_error = models.TextField(blank=True)
+    database_celery_task_id = models.CharField(max_length=255, blank=True)
     status = models.CharField(
         max_length=16,
         choices=Status.choices,

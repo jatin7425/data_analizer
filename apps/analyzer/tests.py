@@ -8,9 +8,17 @@ from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from cryptography.fernet import Fernet, InvalidToken
 
+from .database_provisioning import normalize_postgres_type
 from .models import AnalysisTask, ExcelUpload
-from .tasks import OUTPUT_MARKER, process_excel_upload
+from .security import decrypt_database_password, encrypt_database_password
+from .tasks import (
+    OUTPUT_MARKER,
+    generate_mapping_plan,
+    process_excel_upload,
+    provision_database,
+)
 
 
 class ExcelUploadTests(TestCase):
@@ -239,6 +247,267 @@ class ExcelUploadTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+    def test_completed_task_detail_offers_approve_and_reject(self):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("review.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+        )
+
+        response = self.client.get(
+            reverse("analyzer:task_detail", args=[task.pk])
+        )
+
+        self.assertContains(response, reverse("analyzer:review_task", args=[task.pk]))
+        self.assertContains(response, 'value="approve"')
+        self.assertContains(response, 'value="reject"')
+
+    def test_approving_task_queues_mapping_generation(self):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("approve.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+        )
+
+        with patch("apps.analyzer.views.generate_mapping_plan.delay") as enqueue:
+            enqueue.return_value.id = "mapping-celery-id"
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    reverse("analyzer:review_task", args=[task.pk]),
+                    {"decision": "approve"},
+                )
+
+        self.assertRedirects(
+            response,
+            reverse("analyzer:task_detail", args=[task.pk]),
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.review_status, AnalysisTask.ReviewStatus.APPROVED)
+        self.assertEqual(task.mapping_status, AnalysisTask.MappingStatus.PENDING)
+        self.assertEqual(task.mapping_celery_task_id, "mapping-celery-id")
+        enqueue.assert_called_once_with(task.pk)
+
+    def test_rejecting_task_does_not_queue_mapping_generation(self):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("reject.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+        )
+
+        with patch("apps.analyzer.views.generate_mapping_plan.delay") as enqueue:
+            response = self.client.post(
+                reverse("analyzer:review_task", args=[task.pk]),
+                {"decision": "reject"},
+            )
+
+        self.assertRedirects(
+            response,
+            reverse("analyzer:task_detail", args=[task.pk]),
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.review_status, AnalysisTask.ReviewStatus.REJECTED)
+        self.assertEqual(task.mapping_status, AnalysisTask.MappingStatus.NOT_STARTED)
+        enqueue.assert_not_called()
+
+    @patch("apps.analyzer.tasks.subprocess.run")
+    def test_mapping_worker_saves_mapping_plan_in_task_row(self, run_mapping):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("mapped.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            database_design={
+                "tables": [
+                    {
+                        "table_name": "orders",
+                        "columns": [
+                            {
+                                "column_name": "order_id",
+                                "source_columns": ["Order ID"],
+                                "primary_key": True,
+                            }
+                        ],
+                    }
+                ]
+            },
+        )
+
+        def write_mapping_plan(command, *, env, **kwargs):
+            self.assertEqual(
+                json.loads(Path(env["DATABASE_DESIGN_FILE"]).read_text()),
+                task.database_design,
+            )
+            mapping_plan = {
+                "source_file": "mapped.xlsx",
+                "approved": False,
+                "tables": [{"table_name": "orders", "columns": []}],
+            }
+            Path(env["MAPPING_PLAN_FILE"]).write_text(json.dumps(mapping_plan))
+            return subprocess.CompletedProcess(command, 0, stdout="", stderr="")
+
+        run_mapping.side_effect = write_mapping_plan
+        generate_mapping_plan.apply(args=(task.pk,), throw=True)
+
+        task.refresh_from_db()
+        self.assertEqual(task.mapping_status, AnalysisTask.MappingStatus.COMPLETED)
+        self.assertEqual(
+            task.mapping_plan["tables"][0]["table_name"],
+            "orders",
+        )
+
+    @override_settings(ANALYZER_CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode())
+    def test_database_setup_submission_encrypts_password_and_queues_task(self):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("database.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            mapping_status=AnalysisTask.MappingStatus.COMPLETED,
+        )
+
+        with patch("apps.analyzer.views.provision_database.delay") as enqueue:
+            enqueue.return_value.id = "database-celery-id"
+            with self.captureOnCommitCallbacks(execute=True):
+                response = self.client.post(
+                    reverse("analyzer:setup_database", args=[task.pk]),
+                    {
+                        "host": "db.example.test",
+                        "port": "5432",
+                        "username": "analyst",
+                        "password": "dont-store-this",
+                        "database_name": "sales_reporting",
+                    },
+                )
+
+        self.assertRedirects(
+            response,
+            reverse("analyzer:task_detail", args=[task.pk]),
+        )
+        task.refresh_from_db()
+        self.assertEqual(task.database_status, AnalysisTask.DatabaseStatus.PENDING)
+        self.assertEqual(task.target_db_name, "sales_reporting")
+        self.assertNotEqual(task.target_db_password_encrypted, "dont-store-this")
+        self.assertEqual(
+            decrypt_database_password(task.target_db_password_encrypted),
+            "dont-store-this",
+        )
+        enqueue.assert_called_once_with(task.pk)
+        self.assertEqual(task.database_celery_task_id, "database-celery-id")
+
+    @override_settings(ANALYZER_CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode())
+    @patch("apps.analyzer.tasks.ensure_database_and_schema")
+    def test_database_worker_stores_result_and_clears_password(self, ensure_database):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("database.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            mapping_status=AnalysisTask.MappingStatus.COMPLETED,
+            target_db_host="db.example.test",
+            target_db_port=5432,
+            target_db_user="analyst",
+            target_db_name="sales_reporting",
+            target_db_password_encrypted=encrypt_database_password(
+                "temporary-password"
+            ),
+        )
+        ensure_database.return_value = {
+            "database_created": True,
+            "tables_created": ["orders"],
+            "columns_added": [],
+            "type_conflicts": [],
+            "nullability_notes": [],
+            "database_exists": False,
+        }
+
+        provision_database.apply(args=(task.pk,), throw=True)
+
+        task.refresh_from_db()
+        self.assertEqual(task.database_status, AnalysisTask.DatabaseStatus.COMPLETED)
+        self.assertEqual(task.database_result["tables_created"], ["orders"])
+        self.assertEqual(task.database_result["host"], "db.example.test")
+        self.assertEqual(task.target_db_password_encrypted, "")
+        ensure_database.assert_called_once_with(
+            host="db.example.test",
+            port=5432,
+            username="analyst",
+            password="temporary-password",
+            database_name="sales_reporting",
+            database_design=task.database_design,
+        )
+
+    def test_database_worker_records_decryption_failure_and_clears_password(self):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("database.xlsx", b"spreadsheet"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+            status=AnalysisTask.Status.COMPLETED,
+            mapping_status=AnalysisTask.MappingStatus.COMPLETED,
+            target_db_password_encrypted="encrypted-with-another-key",
+        )
+
+        with override_settings(
+            ANALYZER_CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode()
+        ):
+            with self.assertRaises(InvalidToken):
+                provision_database.apply(args=(task.pk,), throw=True)
+
+        task.refresh_from_db()
+        self.assertEqual(task.database_status, AnalysisTask.DatabaseStatus.FAILED)
+        self.assertLess(len(task.database_error), 200)
+        self.assertEqual(task.target_db_password_encrypted, "")
+
+    def test_database_setup_rejects_invalid_database_name(self):
+        from .forms import DatabaseConnectionForm
+
+        form = DatabaseConnectionForm(
+            {
+                "host": "localhost",
+                "port": "5432",
+                "username": "analyst",
+                "password": "password",
+                "database_name": "sales; DROP DATABASE postgres",
+            }
+        )
+
+        self.assertFalse(form.is_valid())
+        with self.assertRaises(ValueError):
+            normalize_postgres_type("TEXT; DROP TABLE users")
 
     def test_user_can_soft_delete_task_from_dashboard(self):
         upload = ExcelUpload.objects.create(

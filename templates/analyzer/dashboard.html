@@ -55,6 +55,7 @@
                                 <th class="px-5 py-3 font-semibold">Excel sheet</th>
                                 <th class="px-5 py-3 font-semibold">Columns</th>
                                 <th class="px-5 py-3 font-semibold">Task status</th>
+                                <th class="px-5 py-3 font-semibold">Review</th>
                                 <th class="px-5 py-3 font-semibold">Is deleted</th>
                                 <th class="px-5 py-3 font-semibold">Uploaded</th>
                                 <th class="px-5 py-3 font-semibold">Actions</th>
@@ -79,6 +80,7 @@
                                             <p class="mt-2 max-w-xs break-words text-xs text-red-300">{{ task.error_message }}</p>
                                         {% endif %}
                                     </td>
+                                    <td class="px-5 py-4">{{ task.get_review_status_display }}</td>
                                     <td class="px-5 py-4">{{ task.is_deleted|yesno:"Yes,No" }}</td>
                                     <td class="whitespace-nowrap px-5 py-4 text-gray-400">{{ task.created_at|date:"M j, Y, P" }}</td>
                                     <td class="px-5 py-4">
