@@ -284,11 +284,20 @@ def process_excel_upload(self, analysis_task_id):
                 [sys.executable, str(Path(__file__).with_name("processor_main.py"))],
                 cwd=workdir,
                 env=environment,
-                check=True,
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=settings.ANALYZER_TASK_TIMEOUT,
             )
+            if processor_result.returncode:
+                processor_error = (processor_result.stderr or "").strip()
+                if len(processor_error) > 4000:
+                    processor_error = processor_error[-4000:]
+                details = processor_error or "No error details were captured."
+                raise RuntimeError(
+                    "Excel processor exited with status "
+                    f"{processor_result.returncode}: {details}"
+                )
 
         _, marker, serialized_outputs = processor_result.stdout.rpartition(OUTPUT_MARKER)
         if not marker:

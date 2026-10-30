@@ -18,6 +18,7 @@ from .data_importing import (
     upsert_dataframe,
 )
 from .models import AnalysisTask, DataImport, ExcelUpload
+from .processor_utils import build_database_design_prompt
 from .security import decrypt_database_password, encrypt_database_password
 from .tasks import (
     OUTPUT_MARKER,
@@ -36,6 +37,18 @@ class ExcelUploadTests(TestCase):
         self.addCleanup(self.media_directory.cleanup)
         self.user = User.objects.create_user(username="analyst", password="test-password")
         self.client.force_login(self.user)
+
+    def test_database_design_prompt_uses_source_column_placeholder(self):
+        prompt = build_database_design_prompt(
+            [{"column_name": "SKU", "pandas_dtype": "object"}],
+            row_count=12,
+            column_count=1,
+        )
+
+        self.assertIn('"source_columns": ["source_column_name"]', prompt)
+        self.assertIn('"column_name": "SKU"', prompt)
+        self.assertIn('"tables": [', prompt)
+        self.assertNotIn("Original Excel column", prompt)
 
     def test_user_can_upload_excel_sheet_and_see_it_on_dashboard(self):
         response = self.client.post(
@@ -140,6 +153,35 @@ class ExcelUploadTests(TestCase):
         task.refresh_from_db()
         self.assertEqual(task.status, AnalysisTask.Status.FAILED)
         self.assertIn("Ollama is unavailable", task.error_message)
+
+    @patch(
+        "apps.analyzer.tasks.subprocess.run",
+        return_value=subprocess.CompletedProcess(
+            args=["processor_main.py"],
+            returncode=1,
+            stdout="",
+            stderr="ConnectionError: Could not connect to Ollama",
+        ),
+    )
+    def test_worker_records_processor_stderr(self, run_processor):
+        upload = ExcelUpload.objects.create(
+            user=self.user,
+            file=SimpleUploadedFile("broken.xlsx", b"excel content"),
+        )
+        task = AnalysisTask.objects.create(
+            user=self.user,
+            upload=upload,
+            excel_sheet_name=upload.filename,
+        )
+
+        with self.assertRaisesRegex(
+            RuntimeError, "Could not connect to Ollama"
+        ):
+            process_excel_upload.apply(args=(task.pk,), throw=True)
+
+        task.refresh_from_db()
+        self.assertEqual(task.status, AnalysisTask.Status.FAILED)
+        self.assertIn("Could not connect to Ollama", task.error_message)
 
     def test_upload_rejects_non_excel_files(self):
         response = self.client.post(

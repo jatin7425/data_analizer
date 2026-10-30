@@ -202,3 +202,125 @@ The checked-in Django settings are for local development (`DEBUG=True`). Do
 not deploy them as-is to a public or production environment. Use a
 production-grade secret key, secure environment-specific settings, and
 properly restricted database credentials before deployment.
+
+## Public deployment checklist
+
+This repository is currently configured for local development. These steps
+describe what to prepare before making it reachable from the public internet;
+they are not a one-command deployment recipe. Choose a hosting provider and
+deployment architecture before carrying them out.
+
+### 1. Choose and secure the host
+
+- Choose a Linux VPS or managed container host with enough memory and CPU for
+  Django, Celery, PostgreSQL, Redis, and Ollama. Ollama model inference can be
+  resource-intensive; alternatively, use a separately secured model service
+  that the worker can reach.
+- Obtain a domain name and point its DNS records to the web host.
+- Keep the operating system, runtime, and dependencies patched. Use a
+  dedicated, unprivileged service account for the application.
+- Configure the host firewall to expose only the required web ports (normally
+  HTTP/HTTPS, with HTTP redirected to HTTPS). Do not expose PostgreSQL, Redis,
+  or Ollama's API directly to the internet.
+
+### 2. Add production Django settings before deployment
+
+The current `data_analizer/settings.py` has `DEBUG=True`, a hard-coded
+development `SECRET_KEY`, and `ALLOWED_HOSTS=[]`. Production deployment must
+not use those settings. Before launching publicly:
+
+- Load `SECRET_KEY` from the host's secret manager or environment; generate a
+  new, private value for production and never commit it.
+- Set `DEBUG=False` and configure `ALLOWED_HOSTS` for the public domain(s).
+- Configure `CSRF_TRUSTED_ORIGINS` for the HTTPS origin(s).
+- Enable secure session and CSRF cookies and HTTPS-related security settings.
+  Enable HSTS only after HTTPS is confirmed working.
+- Run `python manage.py check --deploy` and address the deployment warnings.
+- Decide whether public user registration is intended. If not, disable or
+  restrict sign-up before launch.
+
+These settings are not fully implemented in the current project; update and
+test the deployment configuration before treating the checklist as complete.
+
+### 3. Configure secrets and services
+
+Provide production values through the hosting platform's secret manager or
+environment configuration, not a committed `.env` file. Configure at least:
+
+- Django `SECRET_KEY` (after production settings support it)
+- `POSTGRES_DB`, `POSTGRES_USER`, and `POSTGRES_PASSWORD`
+- `POSTGRES_HOST` and `POSTGRES_PORT`
+- `CELERY_BROKER_URL`
+- `OLLAMA_MODEL`
+- `ANALYZER_CREDENTIAL_ENCRYPTION_KEY`
+
+Generate a new Fernet key for production using the command in the local setup
+section. Keep it private, back it up securely, and use the exact same value in
+the web and worker processes. Changing or losing this key prevents decryption
+of database passwords stored by the application.
+
+Use managed PostgreSQL and Redis or run them on private networks with
+persistent storage and access controls. The development `docker-compose.yml`
+publishes PostgreSQL on host port `5435` and Redis on `6379`; do not expose
+those ports publicly in production. Restrict PostgreSQL privileges to what
+the application and database-provisioning workflow need. Keep Ollama private
+and reachable only by the worker.
+
+### 4. Run production web and background processes
+
+- Use a production WSGI server (for example, Gunicorn) behind a reverse proxy
+  such as Nginx or Caddy. `manage.py runserver` is for development only.
+- Terminate TLS at the reverse proxy or hosting platform and redirect HTTP to
+  HTTPS. Configure proxy headers and Django security settings for that
+  deployment.
+- Run one or more Celery workers as supervised services (such as
+  `systemd` or the hosting platform's process manager). The worker needs the
+  same application code, secrets, database access, Redis access, and Ollama
+  access as the web process.
+- Configure automatic restarts, structured logs, monitoring, and alerts for
+  the web process, worker, database, Redis, and model service.
+- Set upload-size limits at the reverse proxy/platform and ensure worker
+  timeouts and memory limits fit the expected Excel file sizes and model work.
+
+The current requirements do not include a production WSGI server, and the
+project does not yet include production process or reverse-proxy
+configuration. Add and test these as part of deployment preparation.
+
+### 5. Prepare persistent data, static files, and backups
+
+- Store uploaded files on durable private storage. The current application
+  writes uploads under `MEDIA_ROOT`; local/container filesystem storage can be
+  lost when an instance is replaced unless a persistent volume or object
+  storage is configured.
+- Configure `STATIC_ROOT`, then run:
+
+  ```bash
+  python manage.py collectstatic --noinput
+  ```
+
+  Serve static files through the reverse proxy, a static-file service, or a
+  supported storage backend.
+- Back up PostgreSQL and uploaded files regularly. Protect backups because
+  they may contain user data and encrypted connection credentials. Test
+  restoring them, and keep the production Fernet key backed up separately.
+- Apply Django migrations during deployment before starting new web and
+  worker code:
+
+  ```bash
+  python manage.py migrate
+  ```
+
+### 6. Verify before opening access
+
+1. Deploy to a private/staging URL first and verify HTTPS, login, uploads,
+   analysis jobs, database setup, and imports.
+2. Confirm the web server and Celery worker use the same release and
+   environment, and verify workers restart after code updates.
+3. Check `python manage.py check --deploy`, application logs, worker logs,
+   database connectivity, backups, and restore procedures.
+4. Open public access only after the staging checks pass and firewall rules
+   expose only the intended web endpoints.
+
+The app handles uploaded spreadsheets and stores database connection
+credentials (encrypted with the Fernet key). Treat uploads, database access,
+logs, backups, and encryption keys as sensitive production data.

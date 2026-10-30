@@ -6,6 +6,8 @@ import pandas as pd
 
 import ollama
 
+from processor_utils import build_database_design_prompt
+
 # ============================================================
 # CONFIGURATION
 # ============================================================
@@ -124,70 +126,17 @@ print(json.dumps(schema_profile, indent=2, ensure_ascii=False))
 
 print(f"\n[3/6] Using Ollama model {OLLAMA_MODEL}...")
 
-schema_input = json.dumps(
-    schema_profile,
-    indent=2,
-    ensure_ascii=False
-)
-
-
 # ============================================================
 # STEP 4: ASK THE LLM TO DESIGN THE DATABASE
 # ============================================================
 
 print("\n[4/6] Asking the LLM to design the database...")
 
-prompt = f"""
-You are a senior data architect specializing in PostgreSQL.
-
-Analyze this Excel dataset and propose a database design.
-
-DATASET:
-- Rows: {len(df)}
-- Columns: {len(df.columns)}
-
-COLUMN PROFILE:
-{schema_input}
-
-Return ONLY valid JSON with this structure:
-
-{{
-  "database": "PostgreSQL",
-  "reasoning": "Explanation of the design",
-  "tables": [
-    {{
-      "table_name": "example_table in lowercase",
-      "purpose": "Purpose of the table",
-      "columns": [
-        {{
-          "column_name": "example_id",
-          "source_columns": ["Original Excel column {schema_profile}"],
-          "postgres_type": "TEXT",
-          "nullable": true,
-          "primary_key": false,
-          "foreign_key": null,
-          "reason": "Explanation"
-        }}
-      ]
-    }}
-  ],
-  "assumptions": [],
-  "data_quality_issues": [],
-  "validation_checks": []
-}}
-
-RULES:
-1. Identify logical entities and recommend normalized tables.
-2. Preserve every source column through explicit mappings.
-3. Suggest appropriate PostgreSQL types.
-4. Do not assume a column is a primary key without evidence.
-5. Foreign keys must be treated as candidates for validation.
-6. Do not invent unsupported relationships.
-7. Identify duplicate, redundant, and ambiguous fields.
-8. Explain uncertain business meanings in assumptions.
-9. Avoid unnecessary tables if the data does not justify them.
-10. Return valid JSON only, without Markdown fences.
-"""
+prompt = build_database_design_prompt(
+    schema_profile,
+    row_count=len(df),
+    column_count=len(df.columns),
+)
 
 # response = client.chat.completions.create(
 #     model=MODEL_ID,
@@ -256,12 +205,22 @@ def parse_llm_json(text):
 
     result = json.loads(text)
 
-    if not isinstance(result.get("tables"), list):
-        raise ValueError("Missing or invalid tables list.")
+    if not isinstance(result, dict):
+        raise ValueError("Ollama returned a database design that is not a JSON object.")
+
+    tables = result.get("tables")
+    if not isinstance(tables, list) or not tables:
+        returned_keys = ", ".join(sorted(result)) or "none"
+        raise ValueError(
+            "Ollama returned an invalid database design: expected a non-empty "
+            f"top-level 'tables' array; returned keys: {returned_keys}."
+        )
 
     table_names = set()
 
-    for table in result["tables"]:
+    for table in tables:
+        if not isinstance(table, dict):
+            raise ValueError("Each item in the tables array must be an object.")
         if not table.get("table_name"):
             raise ValueError("A table has no name.")
 
@@ -282,6 +241,10 @@ def parse_llm_json(text):
         column_names = set()
 
         for column in table["columns"]:
+            if not isinstance(column, dict):
+                raise ValueError(
+                    f"Each column in table {table['table_name']} must be an object."
+                )
             if not column.get("column_name"):
                 raise ValueError("A column has no name.")
 
