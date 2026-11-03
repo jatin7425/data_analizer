@@ -4,6 +4,22 @@
     <meta charset="UTF-8">
     <title>Sign Up - Excel Analyzer</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        input[type="text"],
+        input[type="email"],
+        input[type="password"] {
+            color: #f8fafc !important;
+            background-color: #0f172a;
+            caret-color: #f8fafc;
+        }
+
+        input:-webkit-autofill,
+        input:-webkit-autofill:hover,
+        input:-webkit-autofill:focus {
+            -webkit-text-fill-color: #f8fafc;
+            box-shadow: 0 0 0 1000px #0f172a inset;
+        }
+    </style>
 </head>
 <body class="bg-slate-900 text-white flex items-center justify-center min-h-screen">
     <div class="bg-slate-800 p-8 rounded-2xl border border-slate-700 w-full max-w-md shadow-2xl">
