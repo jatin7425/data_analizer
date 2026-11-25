@@ -1,0 +1,49 @@
+{% load static %}<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Excel Analyzer{% endblock %}</title>
+    {% block refresh %}{% endblock %}
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Schibsted+Grotesk:wght@400;500;600;700&display=swap">
+    <link rel="stylesheet" href="{% static 'analyzer/app.css' %}">
+</head>
+<body>
+    <header class="topbar">
+        <div class="shell">
+            <a href="{% url 'landing' %}" class="brand"><span class="brand-mark" aria-hidden="true"></span>Excel Analyzer</a>
+            <nav class="topbar-actions" aria-label="Account">
+                {% block topbar_actions %}
+                    {% if user.is_authenticated %}
+                        <a href="{% url 'analyzer:dashboard' %}" class="btn btn-secondary">Dashboard</a>
+                        <form method="post" action="{% url 'accounts:logout' %}">
+                            {% csrf_token %}
+                            <button type="submit" class="btn btn-link">Log out</button>
+                        </form>
+                    {% else %}
+                        <a href="{% url 'accounts:login' %}" class="btn btn-link">Log in</a>
+                        <a href="{% url 'accounts:signup' %}" class="btn btn-primary">Create account</a>
+                    {% endif %}
+                {% endblock %}
+            </nav>
+        </div>
+    </header>
+
+    {% block body %}
+        <main>
+            <div class="shell {% block shell_class %}{% endblock %}">
+                {% if messages %}
+                    <div class="messages" role="status">
+                        {% for message in messages %}
+                            <p class="notice {% if message.level_tag == 'error' %}notice-error{% elif message.level_tag == 'warning' %}notice-warning{% elif message.level_tag == 'success' %}notice-success{% endif %}">{{ message }}</p>
+                        {% endfor %}
+                    </div>
+                {% endif %}
+                {% block content %}{% endblock %}
+            </div>
+        </main>
+    {% endblock %}
+</body>
+</html>

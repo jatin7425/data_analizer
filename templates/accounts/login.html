@@ -1,39 +1,19 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Sign In - Excel Analyzer</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        input[type="text"],
-        input[type="email"],
-        input[type="password"] {
-            color: #f8fafc !important;
-            background-color: #0f172a;
-            caret-color: #f8fafc;
-        }
+{% extends "base.html" %}
 
-        input:-webkit-autofill,
-        input:-webkit-autofill:hover,
-        input:-webkit-autofill:focus {
-            -webkit-text-fill-color: #f8fafc;
-            box-shadow: 0 0 0 1000px #0f172a inset;
-        }
-    </style>
-</head>
-<body class="bg-slate-900 text-white flex items-center justify-center min-h-screen">
-    <div class="bg-slate-800 p-8 rounded-2xl border border-slate-700 w-full max-w-md shadow-2xl">
-        <h2 class="text-2xl font-bold mb-6 text-center text-indigo-400">Sign In to Your Account</h2>
-        <form method="post" class="space-y-4">
+{% block title %}Log in - Excel Analyzer{% endblock %}
+
+{% block body %}
+<main class="auth">
+    <div class="panel auth-card">
+        <h1>Log in</h1>
+        <p>Pick up where you left off with your workbooks.</p>
+        <form method="post">
             {% csrf_token %}
-            {{ form.as_p }}
-            <button type="submit" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-semibold py-2.5 rounded-lg transition mt-4">
-                Sign In
-            </button>
+            {% include "partials/form_fields.html" %}
+            <input type="hidden" name="next" value="{{ next }}">
+            <button type="submit" class="btn btn-primary">Log in</button>
         </form>
-        <p class="text-center text-sm text-gray-400 mt-4">
-            Don't have an account? <a href="{% url 'accounts:signup' %}" class="text-indigo-400 hover:underline">Sign Up</a>
-        </p>
+        <p class="auth-switch">New here? <a href="{% url 'accounts:signup' %}">Create an account</a></p>
     </div>
-</body>
-</html>
+</main>
+{% endblock %}

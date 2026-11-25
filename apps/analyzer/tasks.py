@@ -213,18 +213,26 @@ def generate_mapping_plan(self, analysis_task_id):
                     "SOURCE_SHEET_NAME": "0",
                 }
             )
-            subprocess.run(
+            mapping_result = subprocess.run(
                 [
                     sys.executable,
                     str(Path(__file__).with_name("mapping_plan_main.py")),
                 ],
                 cwd=workdir,
                 env=environment,
-                check=True,
+                check=False,
                 capture_output=True,
                 text=True,
                 timeout=settings.ANALYZER_TASK_TIMEOUT,
             )
+            if mapping_result.returncode:
+                lines = (mapping_result.stderr or "").strip().splitlines()
+                # The last traceback line names the actual error.
+                details = lines[-1] if lines else "No error details were captured."
+                raise RuntimeError(
+                    "Mapping plan script exited with status "
+                    f"{mapping_result.returncode}: {details}"
+                )
             mapping_plan = json.loads(plan_path.read_text(encoding="utf-8"))
 
         analysis_task.mapping_plan = mapping_plan

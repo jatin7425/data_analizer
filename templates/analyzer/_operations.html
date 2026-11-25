@@ -1,0 +1,157 @@
+{# ---- Database ---- #}
+<section class="section" id="database" aria-labelledby="database-heading">
+    <div class="section-head">
+        <h2 id="database-heading">Database</h2>
+        <p>The PostgreSQL database these tables are created in. If it already exists, missing tables and columns are added; existing tables and data are never dropped or rewritten.</p>
+    </div>
+    <div class="panel">
+        {% if task.database_status == "pending" or task.database_status == "processing" %}
+            <div class="panel-body">
+                <p><span class="pill pill-working">Setting up</span> Creating tables in <span class="code">{{ task.target_db_name }}</span>. This page refreshes on its own.</p>
+            </div>
+        {% elif task.database_status == "completed" %}
+            <div class="panel-body stack">
+                <p><span class="pill pill-done">Ready</span> <strong class="code">{{ task.target_db_name }}</strong> on {{ task.database_result.host }}:{{ task.database_result.port }}, connected as {{ task.database_result.username }}. {% if task.database_result.database_created %}The database was created.{% else %}The database already existed.{% endif %}</p>
+                <p class="muted small">{{ task.database_result.tables_created|length }} table{{ task.database_result.tables_created|length|pluralize }} created, {{ task.database_result.columns_added|length }} column{{ task.database_result.columns_added|length|pluralize }} added.</p>
+                {% if task.database_result.tables_created or task.database_result.columns_added %}
+                    <ul class="small">
+                        {% for table_name in task.database_result.tables_created %}<li>Created table <span class="code">{{ table_name }}</span></li>{% endfor %}
+                        {% for column in task.database_result.columns_added %}<li>Added column <span class="code">{{ column.table }}.{{ column.column }}</span></li>{% endfor %}
+                    </ul>
+                {% endif %}
+                {% if task.database_result.type_conflicts %}
+                    <div class="notice notice-warning">
+                        <h3>Existing columns have different types</h3>
+                        <ul>
+                            {% for conflict in task.database_result.type_conflicts %}
+                                <li><span class="code">{{ conflict.table }}.{{ conflict.column }}</span>: expected {{ conflict.expected }}, found {{ conflict.actual }}. Left unchanged.</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+                {% if task.database_result.nullability_notes %}
+                    <div class="notice notice-warning">
+                        <h3>Check which columns allow empty values</h3>
+                        <ul>
+                            {% for note in task.database_result.nullability_notes %}
+                                <li><span class="code">{{ note.table }}.{{ note.column }}</span>: {{ note.note }}</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+                {% if task.database_result.nullability_conflicts or task.database_result.primary_key_conflicts %}
+                    <div class="notice notice-warning">
+                        <h3>Existing constraints differ from the design</h3>
+                        <ul>
+                            {% for conflict in task.database_result.nullability_conflicts %}
+                                <li><span class="code">{{ conflict.table }}.{{ conflict.column }}</span>: design says {{ conflict.expected_nullable|yesno:"optional,required" }}, database has it {{ conflict.actual_nullable|yesno:"optional,required" }}. Left unchanged.</li>
+                            {% endfor %}
+                            {% for conflict in task.database_result.primary_key_conflicts %}
+                                <li><span class="code">{{ conflict.table }}.{{ conflict.column }}</span>: design says {{ conflict.expected_primary_key|yesno:"primary key,not a primary key" }}, database has it as {{ conflict.actual_primary_key|yesno:"a primary key,not a primary key" }}. Left unchanged.</li>
+                            {% endfor %}
+                        </ul>
+                    </div>
+                {% endif %}
+            </div>
+        {% elif task.database_status == "failed" %}
+            <div class="panel-body">
+                <div class="notice notice-error break" role="alert"><strong>Database setup failed.</strong> {{ task.database_error }} Check the details below and try again.
+                {% if "Connection refused" in task.database_error and task.target_db_port != app_database.PORT %}
+                    <p class="gap-top-sm"><strong>Tip:</strong> this app's own PostgreSQL server runs on {{ app_database.HOST }}, port {{ app_database.PORT }}, with user {{ app_database.USER }}. Nothing answered on port {{ task.target_db_port }}.</p>
+                {% endif %}
+            </div>
+            <p class="small muted gap-top-sm">If the design itself looks wrong, you can
+                {% include "analyzer/_retry_button.html" with step="analysis" label="analyze again" button_class="btn-inline" confirm="Discard this design and ask the model for a new one?" %}
+                instead.</p>
+            </div>
+        {% endif %}
+
+        {% if task.database_status != "pending" and task.database_status != "processing" %}
+            {% if task.database_status == "completed" %}
+                <details class="subsection">
+                    <summary class="subsection-summary">Update database connection</summary>
+                    <p class="muted small gap-top-sm">Change the connection and run setup again. Enter the password again; it's stored encrypted for future imports and never shown.</p>
+            {% else %}
+                <div class="subsection{% if task.database_status == "not_started" %} subsection-first{% endif %}">
+            {% endif %}
+                <form method="post" action="{% url 'analyzer:setup_database' task.id %}" class="gap-top">
+                    {% csrf_token %}
+                    {% include "partials/form_fields.html" with form=database_connection_form grid_class="form-grid-2" %}
+                    <p class="field-help">The password is stored encrypted after setup succeeds and cleared if it fails. Existing columns with different types are reported, not changed.</p>
+                    <div class="btn-row gap-top">
+                        <button type="submit" class="btn btn-primary">{% if task.database_status == "completed" %}Update connection and apply schema{% else %}Create tables{% endif %}</button>
+                    </div>
+                </form>
+            {% if task.database_status == "completed" %}
+                </details>
+            {% else %}
+                </div>
+            {% endif %}
+        {% endif %}
+    </div>
+</section>
+
+{# ---- Imports ---- #}
+{% if task.database_status == "completed" %}
+    <section class="section" id="imports" aria-labelledby="imports-heading">
+        <div class="section-head">
+            <h2 id="imports-heading">Imports</h2>
+            <p>Upload a workbook whose first sheet has the same column names and types as the original; order doesn't matter. Rows that match an existing key are updated instead of duplicated.</p>
+        </div>
+        <div class="panel">
+            {% if not task.target_db_password_encrypted %}
+                <div class="panel-body">
+                    <p class="notice notice-warning">Imports need the database password. Open "Update database connection" above, enter it, and run setup again.</p>
+                </div>
+            {% else %}
+                <form method="post" enctype="multipart/form-data" action="{% url 'analyzer:upload_data_import' task.id %}" class="upload">
+                    {% csrf_token %}
+                    <div class="field">
+                        <label for="{{ data_import_form.file.id_for_label }}">Excel file</label>
+                        {{ data_import_form.file }}
+                    </div>
+                    <button type="submit" class="btn btn-primary">Check columns and import</button>
+                </form>
+            {% endif %}
+
+            {% if data_imports %}
+                <div class="import-list">
+                    <h3 class="visually-hidden">Import history</h3>
+                    {% for data_import in data_imports %}
+                        <div class="import-row">
+                            <div class="import-row-head">
+                                <span class="break">{{ data_import.file.name|cut:"data_imports/" }}</span>
+                                <span class="small muted nowrap">
+                                    {% if data_import.status == "completed" %}<span class="pill pill-done">Imported</span>
+                                    {% elif data_import.status == "pending" or data_import.status == "processing" %}<span class="pill pill-working">{{ data_import.get_status_display }}</span>
+                                    {% else %}<span class="pill pill-failed">{{ data_import.get_status_display }}</span>{% endif %}
+                                    {{ data_import.created_at|date:"M j, Y, P" }}
+                                </span>
+                            </div>
+                            {% if data_import.error_message %}
+                                <p class="small break {% if data_import.status == 'schema_mismatch' or data_import.status == 'failed' %}import-bad{% else %}muted{% endif %} gap-top-sm">{{ data_import.error_message }}</p>
+                            {% endif %}
+                            {% if data_import.schema_mismatch %}
+                                <ul class="import-bad">
+                                    {% if data_import.schema_mismatch.missing_columns %}<li>Missing columns: {{ data_import.schema_mismatch.missing_columns|join:", " }}</li>{% endif %}
+                                    {% if data_import.schema_mismatch.unexpected_columns %}<li>Unexpected columns: {{ data_import.schema_mismatch.unexpected_columns|join:", " }}</li>{% endif %}
+                                    {% if data_import.schema_mismatch.duplicate_columns %}<li>Duplicate columns: {{ data_import.schema_mismatch.duplicate_columns|join:", " }}</li>{% endif %}
+                                    {% for mismatch in data_import.schema_mismatch.type_mismatches %}
+                                        <li>{{ mismatch.column }}: expected {{ mismatch.expected }}, found {{ mismatch.actual }}</li>
+                                    {% endfor %}
+                                </ul>
+                            {% endif %}
+                            {% if data_import.result.tables %}
+                                <ul class="import-ok">
+                                    {% for table_result in data_import.result.tables %}
+                                        <li><span class="code">{{ table_result.table }}</span>: {{ table_result.rows_processed }} row{{ table_result.rows_processed|pluralize }} processed</li>
+                                    {% endfor %}
+                                </ul>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        </div>
+    </section>
+{% endif %}

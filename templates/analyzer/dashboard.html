@@ -1,103 +1,101 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard - Excel Analyzer</title>
-    {% if has_active_tasks %}<meta http-equiv="refresh" content="5">{% endif %}
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="min-h-screen bg-slate-900 font-sans text-white antialiased">
-    <header class="mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
-        <a href="{% url 'landing' %}" class="text-2xl font-bold tracking-tight text-indigo-400">ExcelAnalyzer.ai</a>
-        <div class="flex items-center gap-4">
-            <span class="text-gray-300">{{ user.username }}</span>
-            <form method="post" action="{% url 'accounts:logout' %}">
-                {% csrf_token %}
-                <button type="submit" class="rounded-lg bg-slate-800 px-4 py-2 font-semibold text-gray-200 hover:bg-slate-700">Log out</button>
-            </form>
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Excel Analyzer{% endblock %}
+{% block refresh %}{% if has_active_tasks %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+
+{% block topbar_actions %}
+    <span class="topbar-user">{{ user.username }}</span>
+    <form method="post" action="{% url 'accounts:logout' %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn-link">Log out</button>
+    </form>
+{% endblock %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <h1>Your workbooks</h1>
+        <p>Upload an Excel file to get a proposed database design. Open a workbook to review it, set up the database, and import more data.</p>
+    </div>
+</div>
+
+<section class="panel" aria-labelledby="upload-heading">
+    <div class="panel-head">
+        <h2 id="upload-heading" class="panel-title">Upload a workbook</h2>
+        <p>.xls or .xlsx. The first sheet is analyzed; this usually takes a few minutes.</p>
+    </div>
+    <form method="post" enctype="multipart/form-data" action="{% url 'analyzer:upload' %}" class="upload">
+        {% csrf_token %}
+        <div class="field">
+            <label for="{{ upload_form.file.id_for_label }}">Excel file</label>
+            {{ upload_form.file }}
+            {% for error in upload_form.file.errors %}<p class="field-error">{{ error }}</p>{% endfor %}
         </div>
-    </header>
+        <button type="submit" class="btn btn-primary">Upload and analyze</button>
+    </form>
+</section>
 
-    <main class="mx-auto max-w-5xl px-6 pb-16">
-        <section class="mb-8">
-            <h1 class="text-3xl font-bold">Your Excel sheets</h1>
-            <p class="mt-2 text-gray-400">Upload and keep track of your spreadsheets.</p>
-        </section>
-
-        {% if messages %}
-            <div class="mb-6 space-y-2">
-                {% for message in messages %}
-                    <p class="rounded-lg border border-slate-700 bg-slate-800 px-4 py-3 text-sm">{{ message }}</p>
-                {% endfor %}
-            </div>
-        {% endif %}
-
-        <section class="mb-10 rounded-2xl border border-slate-700 bg-slate-800 p-6">
-            <h2 class="mb-4 text-xl font-semibold">Upload a new Excel sheet</h2>
-            <form method="post" enctype="multipart/form-data" action="{% url 'analyzer:upload' %}" class="flex flex-col gap-4 sm:flex-row sm:items-end">
-                {% csrf_token %}
-                <div class="flex-1">
-                    <label for="{{ upload_form.file.id_for_label }}" class="mb-2 block text-sm font-medium text-gray-300">Choose an .xls or .xlsx file</label>
-                    {{ upload_form.file }}
-                </div>
-                <button type="submit" class="rounded-lg bg-indigo-600 px-5 py-2.5 font-semibold hover:bg-indigo-500">Upload sheet</button>
-            </form>
-        </section>
-
-        <section>
-            <h2 class="mb-4 text-xl font-semibold">Analysis tasks</h2>
-            {% if tasks %}
-                <div class="overflow-x-auto rounded-2xl border border-slate-700 bg-slate-800">
-                    <table class="w-full min-w-[760px] text-left text-sm">
-                        <thead class="bg-slate-700/60 text-gray-300">
-                            <tr>
-                                <th class="px-5 py-3 font-semibold">Excel sheet</th>
-                                <th class="px-5 py-3 font-semibold">Columns</th>
-                                <th class="px-5 py-3 font-semibold">Task status</th>
-                                <th class="px-5 py-3 font-semibold">Review</th>
-                                <th class="px-5 py-3 font-semibold">Is deleted</th>
-                                <th class="px-5 py-3 font-semibold">Uploaded</th>
-                                <th class="px-5 py-3 font-semibold">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-700">
-                            {% for task in tasks %}
-                                <tr class="align-top">
-                                    <td class="break-all px-5 py-4 font-medium">
-                                        <a href="{% url 'analyzer:task_detail' task.id %}" class="text-indigo-300 hover:text-indigo-200 hover:underline">{{ task.excel_sheet_name }}</a>
-                                    </td>
-                                    <td class="px-5 py-4 text-gray-300">
-                                        {% for column in task.schema_profile %}
-                                            {{ column.column_name }}{% if not forloop.last %}, {% endif %}
-                                        {% empty %}
-                                            {% if task.status == "failed" %}Unavailable{% else %}Waiting for analysis{% endif %}
-                                        {% endfor %}
-                                    </td>
-                                    <td class="px-5 py-4">
-                                        <span class="rounded-full bg-slate-700 px-3 py-1">{{ task.get_status_display }}</span>
-                                        {% if task.error_message %}
-                                            <p class="mt-2 max-w-xs break-words text-xs text-red-300">{{ task.error_message }}</p>
-                                        {% endif %}
-                                    </td>
-                                    <td class="px-5 py-4">{{ task.get_review_status_display }}</td>
-                                    <td class="px-5 py-4">{{ task.is_deleted|yesno:"Yes,No" }}</td>
-                                    <td class="whitespace-nowrap px-5 py-4 text-gray-400">{{ task.created_at|date:"M j, Y, P" }}</td>
-                                    <td class="px-5 py-4">
-                                        <form method="post" action="{% url 'analyzer:delete_task' task.id %}" onsubmit="return confirm('Remove this analysis from your dashboard?');">
-                                            {% csrf_token %}
-                                            <button type="submit" class="rounded-lg border border-red-800 px-3 py-1.5 font-medium text-red-300 hover:bg-red-950">Delete</button>
-                                        </form>
-                                    </td>
-                                </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            {% else %}
-                <p class="rounded-2xl border border-dashed border-slate-700 px-5 py-8 text-center text-gray-400">No analysis tasks yet. Upload your first Excel sheet above.</p>
-            {% endif %}
-        </section>
-    </main>
-</body>
-</html>
+<section class="section" aria-labelledby="tasks-heading">
+    <div class="section-head">
+        <h2 id="tasks-heading">Analyses</h2>
+        {% if has_active_tasks %}<p>Analyses in progress update on their own every few seconds.</p>{% endif %}
+    </div>
+    {% if tasks %}
+        <div class="panel table-wrap">
+            <table class="data-table data-table-wide">
+                <thead>
+                    <tr>
+                        <th scope="col">Workbook</th>
+                        <th scope="col">Columns</th>
+                        <th scope="col">Progress</th>
+                        <th scope="col">Uploaded</th>
+                        <th scope="col"><span class="visually-hidden">Actions</span></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for task in tasks %}
+                        <tr>
+                            <td class="break">
+                                <a href="{% url 'analyzer:task_detail' task.id %}" class="task-link">{{ task.excel_sheet_name }}</a>
+                            </td>
+                            <td>
+                                {% if task.schema_profile %}
+                                    <div class="column-list">
+                                        {% for column in task.schema_profile|slice:":4" %}{{ column.column_name }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if task.schema_profile|length > 4 %}, and {{ task.schema_profile|length|add:"-4" }} more{% endif %}
+                                    </div>
+                                {% else %}
+                                    <span class="muted small">{% if task.status == "failed" %}Unavailable{% else %}Not profiled yet{% endif %}</span>
+                                {% endif %}
+                            </td>
+                            <td class="stage-cell">
+                                <span class="pill pill-{{ task.stage.state }}">{{ task.stage.note }}</span>
+                                <span class="stage-name">{{ task.stage.name }}</span>
+                                {% if task.stage.state == "failed" and task.error_message %}<p class="field-error break">{{ task.error_message|truncatechars:140 }}</p>{% endif %}
+                            </td>
+                            <td class="muted small nowrap">{{ task.created_at|date:"M j, Y, P" }}</td>
+                            <td class="align-end row-actions">
+                                {% if task.stage.state == "action" %}
+                                    <a href="{% url 'analyzer:task_detail' task.id %}" class="btn btn-primary">{% if task.stage.key == "review" %}Review{% elif task.stage.key == "database" %}Set up database{% else %}Import data{% endif %}<span class="visually-hidden"> {{ task.excel_sheet_name }}</span></a>
+                                {% elif task.stage.state == "failed" and task.stage.key == "analysis" or task.stage.state == "failed" and task.stage.key == "mapping" %}
+                                    {% include "analyzer/_retry_button.html" with step=task.stage.key label="Try again" %}
+                                {% elif task.stage.state != "working" and task.status == "completed" %}
+                                    <a href="{% url 'analyzer:task_detail' task.id %}" class="btn btn-secondary">Open<span class="visually-hidden"> {{ task.excel_sheet_name }}</span></a>
+                                {% endif %}
+                                <form method="post" action="{% url 'analyzer:delete_task' task.id %}" onsubmit="return confirm('Remove {{ task.excel_sheet_name|escapejs }} from your dashboard?');">
+                                    {% csrf_token %}
+                                    <button type="submit" class="btn btn-link">Remove<span class="visually-hidden"> {{ task.excel_sheet_name }}</span></button>
+                                </form>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    {% else %}
+        <div class="empty">
+            <strong>No workbooks yet</strong>
+            Upload an Excel file above to get your first proposed database design.
+        </div>
+    {% endif %}
+</section>
+{% endblock %}

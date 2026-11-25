@@ -6,7 +6,7 @@ import pandas as pd
 
 import ollama
 
-from processor_utils import build_database_design_prompt
+from processor_utils import ALLOWED_TYPES, build_database_design_prompt, normalize_design
 
 # ============================================================
 # CONFIGURATION
@@ -260,6 +260,11 @@ def parse_llm_json(text):
 
             column_names.add(normalized_column)
 
+    for note in normalize_design(
+        result, source_headers=list(df.columns), schema_profile=schema_profile
+    ):
+        print("Adjusted model output:", note)
+
     return result
 
 
@@ -303,30 +308,6 @@ for table in db_design["tables"]:
 # ============================================================
 
 print("\n[6/6] Generating PostgreSQL SQL...")
-
-
-ALLOWED_TYPES = {
-    "SMALLINT",
-    "INTEGER",
-    "BIGINT",
-    "REAL",
-    "DOUBLE PRECISION",
-    "BOOLEAN",
-    "TEXT",
-    "DATE",
-    "TIMESTAMP",
-    "TIMESTAMPTZ",
-    "JSONB",
-    "UUID",
-    "NUMERIC",
-    "NUMERIC(10,2)",
-    "NUMERIC(12,2)",
-    "NUMERIC(14,2)",
-    "VARCHAR(50)",
-    "VARCHAR(100)",
-    "VARCHAR(255)"
-}
-
 
 def generate_postgres_ddl(design):
     statements = []

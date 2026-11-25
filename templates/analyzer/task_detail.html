@@ -1,411 +1,94 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ task.excel_sheet_name }} - Analysis - Excel Analyzer</title>
-    {% if task.mapping_status == "pending" or task.mapping_status == "processing" or task.database_status == "pending" or task.database_status == "processing" or has_active_imports %}<meta http-equiv="refresh" content="5">{% endif %}
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="min-h-screen bg-slate-900 font-sans text-white antialiased">
-    <header class="mx-auto flex max-w-7xl items-center justify-between px-6 py-6">
-        <a href="{% url 'landing' %}" class="text-2xl font-bold tracking-tight text-indigo-400">ExcelAnalyzer.ai</a>
-        <a href="{% url 'analyzer:dashboard' %}" class="rounded-lg bg-slate-800 px-4 py-2 font-semibold text-gray-200 hover:bg-slate-700">Back to dashboard</a>
-    </header>
+{% extends "base.html" %}
+{% load analyzer_extras %}
 
-    <main class="mx-auto max-w-6xl px-6 pb-16">
-        <section class="mb-8">
-            <p class="mb-2 text-sm font-medium uppercase tracking-wide text-indigo-300">Analysis details</p>
-            <h1 class="break-all text-3xl font-bold">{{ task.excel_sheet_name }}</h1>
-            <div class="mt-3 flex flex-wrap items-center gap-3 text-sm text-gray-400">
-                <span class="rounded-full bg-slate-800 px-3 py-1 text-white">{{ task.get_status_display }}</span>
-                <span>Uploaded {{ task.created_at|date:"M j, Y, P" }}</span>
+{% block title %}{{ task.excel_sheet_name }} - Excel Analyzer{% endblock %}
+{% block refresh %}{% if current_stage.state == "working" %}<meta http-equiv="refresh" content="5">{% endif %}{% endblock %}
+
+{% block content %}
+<div class="page-head">
+    <div>
+        <p class="small"><a href="{% url 'analyzer:dashboard' %}">Your workbooks</a></p>
+        <h1 class="break">{{ task.excel_sheet_name }}</h1>
+        <p class="meta-line">Uploaded {{ task.created_at|date:"M j, Y, P" }}{% if task.schema_profile %}, {{ task.schema_profile|length }} columns{% endif %}</p>
+    </div>
+</div>
+
+<ol class="stages" aria-label="Progress">
+    {% for stage in stages %}
+        <li class="stage is-{{ stage.state }}{% if stage.is_current %} is-current{% endif %}"{% if stage.is_current %} aria-current="step"{% endif %}>
+            <span class="stage-number">{{ stage.number }}</span>
+            <span class="stage-title">{{ stage.name }}</span>
+            <span class="stage-note">{{ stage.note }}</span>
+        </li>
+    {% endfor %}
+</ol>
+
+{% if task.error_message %}
+    <div class="notice notice-error break" role="alert"><strong>Analysis failed.</strong> {{ task.error_message }}</div>
+{% endif %}
+
+{% if task.status == "completed" %}
+
+    {# ---- What to do next ---- #}
+    {% if task.review_status == "pending" %}
+        <section class="callout" aria-labelledby="review-heading">
+            <div>
+                <h2 id="review-heading" class="panel-title">Review the proposed design</h2>
+                <p>Check the tables and SQL below. Approving builds a mapping plan from your sheet's columns to these tables. Rejecting stops here.</p>
             </div>
-            {% if task.error_message %}
-                <p class="mt-4 rounded-lg border border-red-800 bg-red-950/40 px-4 py-3 text-red-200">{{ task.error_message }}</p>
-            {% endif %}
+            <div class="btn-row">
+                <form method="post" action="{% url 'analyzer:review_task' task.id %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="decision" value="approve">
+                    <button type="submit" class="btn btn-primary">Approve design</button>
+                </form>
+                <form method="post" action="{% url 'analyzer:review_task' task.id %}" onsubmit="return confirm('Reject this design? No mapping plan or database will be created.');">
+                    {% csrf_token %}
+                    <input type="hidden" name="decision" value="reject">
+                    <button type="submit" class="btn btn-danger">Reject</button>
+                </form>
+                {% include "analyzer/_retry_button.html" with step="analysis" label="Analyze again" confirm="Discard this design and ask the model for a new one?" %}
+            </div>
         </section>
+    {% elif task.review_status == "rejected" %}
+        <div class="notice notice-row">
+            <p>You rejected this design. Analyze the workbook again to get a new proposal.</p>
+            {% include "analyzer/_retry_button.html" with step="analysis" label="Analyze again" button_class="btn-primary" %}
+        </div>
+    {% elif task.mapping_status == "failed" %}
+        <div class="notice notice-error notice-row" role="alert">
+            <p class="break"><strong>The mapping plan couldn't be built.</strong> {{ task.mapping_error }}</p>
+            <div class="btn-row">
+                {% include "analyzer/_retry_button.html" with step="mapping" label="Try again" button_class="btn-primary" %}
+                {% include "analyzer/_retry_button.html" with step="analysis" label="Analyze again" confirm="Discard this design and ask the model for a new one?" %}
+            </div>
+        </div>
+    {% elif task.mapping_status != "completed" %}
+        <p class="notice notice-success">Design approved. Building the mapping plan; this page refreshes on its own.</p>
+    {% endif %}
 
-        {% if task.status == "completed" %}
-            {% if task.review_status == "pending" %}
-                <section class="mb-8 rounded-2xl border border-indigo-800 bg-indigo-950/40 p-5">
-                    <h2 class="text-lg font-semibold">Review this analysis</h2>
-                    <p class="mt-1 text-sm text-gray-300">Approve to generate and save a source-to-target mapping plan, or reject this analysis.</p>
-                    <div class="mt-4 flex flex-wrap gap-3">
-                        <form method="post" action="{% url 'analyzer:review_task' task.id %}">
-                            {% csrf_token %}
-                            <input type="hidden" name="decision" value="approve">
-                            <button type="submit" class="rounded-lg bg-emerald-600 px-4 py-2 font-semibold hover:bg-emerald-500">Approve and create mapping</button>
-                        </form>
-                        <form method="post" action="{% url 'analyzer:review_task' task.id %}" onsubmit="return confirm('Reject this analysis? A mapping plan will not be generated.');">
-                            {% csrf_token %}
-                            <input type="hidden" name="decision" value="reject">
-                            <button type="submit" class="rounded-lg border border-red-700 px-4 py-2 font-semibold text-red-200 hover:bg-red-950">Reject</button>
-                        </form>
-                    </div>
-                </section>
-            {% else %}
-                <p class="mb-8 rounded-xl border border-slate-700 bg-slate-800 px-5 py-3 text-sm text-gray-300">
-                    Review decision: <span class="font-semibold text-white">{{ task.get_review_status_display }}</span>
-                    {% if task.review_status == "approved" %}<span class="ml-2">Mapping plan: {{ task.get_mapping_status_display }}</span>{% endif %}
-                </p>
-                {% if task.mapping_error %}
-                    <p class="mb-8 rounded-lg border border-red-800 bg-red-950/40 px-4 py-3 text-red-200">{{ task.mapping_error }}</p>
-                {% endif %}
-            {% endif %}
+    {% if task.mapping_status == "completed" %}
+        {# Once the design is approved and mapped, the database and imports are what you come back for. #}
+        {% include "analyzer/_operations.html" %}
+        {% include "analyzer/_mapping.html" %}
+        {% include "analyzer/_design.html" %}
+    {% else %}
+        {% include "analyzer/_design.html" %}
+    {% endif %}
 
-            <section class="mb-10">
-                <div class="mb-4">
-                    <h2 class="text-2xl font-semibold">Normalized table schema</h2>
-                    <p class="mt-1 text-gray-400">Proposed normalized tables and their columns.</p>
-                </div>
 
-                {% if schema_tables %}
-                    <div class="space-y-5">
-                        {% for table in schema_tables %}
-                            <article class="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800">
-                                <div class="border-b border-slate-700 px-5 py-4">
-                                    <h3 class="text-lg font-semibold">{{ table.table_name }}</h3>
-                                    {% if table.purpose %}<p class="mt-1 text-sm text-gray-400">{{ table.purpose }}</p>{% endif %}
-                                </div>
-                                <div class="overflow-x-auto">
-                                    <table class="w-full min-w-[560px] text-left text-sm">
-                                        <thead class="bg-slate-700/60 text-gray-300">
-                                            <tr>
-                                                <th class="px-5 py-3 font-semibold">Column</th>
-                                                <th class="px-5 py-3 font-semibold">PostgreSQL type</th>
-                                                <th class="px-5 py-3 font-semibold">Nullable</th>
-                                                <th class="px-5 py-3 font-semibold">Key</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody class="divide-y divide-slate-700">
-                                            {% for column in table.columns %}
-                                                <tr>
-                                                    <td class="px-5 py-3 font-medium">{{ column.column_name }}</td>
-                                                    <td class="px-5 py-3 font-mono text-indigo-200">{{ column.postgres_type|default:"TEXT" }}</td>
-                                                    <td class="px-5 py-3">{{ column.nullable|yesno:"Yes,No" }}</td>
-                                                    <td class="px-5 py-3">
-                                                        {% if column.primary_key %}Primary key{% elif column.foreign_key %}Foreign key{% else %}—{% endif %}
-                                                    </td>
-                                                </tr>
-                                            {% empty %}
-                                                <tr><td colspan="4" class="px-5 py-4 text-gray-400">No columns were proposed for this table.</td></tr>
-                                            {% endfor %}
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </article>
-                        {% endfor %}
-                    </div>
-                {% else %}
-                    <p class="rounded-xl border border-slate-700 bg-slate-800 px-5 py-4 text-gray-300">No normalized tables were proposed.</p>
-                {% endif %}
-
-                <details class="mt-5 rounded-2xl border border-slate-700 bg-slate-800">
-                    <summary class="cursor-pointer px-5 py-4 font-semibold">View generated SQL schema</summary>
-                    <pre class="overflow-x-auto border-t border-slate-700 p-5 text-sm text-emerald-200"><code>{{ task.proposed_schema }}</code></pre>
-                </details>
-            </section>
-
-            <section class="mb-10">
-                <div class="mb-4">
-                    <h2 class="text-2xl font-semibold">Suggested reports and analysis types</h2>
-                    <p class="mt-1 text-gray-400">Available analysis ideas generated from the workbook and proposed schema.</p>
-                </div>
-                {% if reports %}
-                    <div class="grid gap-4 md:grid-cols-2">
-                        {% for report in reports %}
-                            <article class="rounded-2xl border border-slate-700 bg-slate-800 p-5">
-                                <div class="flex flex-wrap items-start justify-between gap-2">
-                                    <h3 class="text-lg font-semibold">{{ report.report_name|default:report.report_id }}</h3>
-                                    {% if report.feasibility %}
-                                        <span class="rounded-full bg-indigo-950 px-3 py-1 text-xs font-medium text-indigo-200">{{ report.feasibility|title }}</span>
-                                    {% endif %}
-                                </div>
-                                {% if report.category %}<p class="mt-1 text-sm text-indigo-300">{{ report.category }}</p>{% endif %}
-                                {% if report.description %}<p class="mt-3 text-sm leading-6 text-gray-300">{{ report.description }}</p>{% endif %}
-
-                                {% if report.metrics %}
-                                    <div class="mt-4">
-                                        <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-400">Metrics</h4>
-                                        <ul class="mt-2 list-inside list-disc space-y-1 text-sm text-gray-300">
-                                            {% for metric in report.metrics %}<li>{{ metric }}</li>{% endfor %}
-                                        </ul>
-                                    </div>
-                                {% endif %}
-
-                                {% if report.required_columns %}
-                                    <div class="mt-4">
-                                        <h4 class="text-xs font-semibold uppercase tracking-wide text-gray-400">Required columns</h4>
-                                        <p class="mt-2 text-sm text-gray-300">{{ report.required_columns|join:", " }}</p>
-                                    </div>
-                                {% endif %}
-
-                                <div class="mt-4 flex flex-wrap gap-2 text-xs">
-                                    {% if report.visualization %}<span class="rounded bg-slate-700 px-2.5 py-1 text-gray-200">{{ report.visualization|cut:"_"|title }}</span>{% endif %}
-                                    {% for filter in report.filters %}<span class="rounded bg-slate-700 px-2.5 py-1 text-gray-200">{{ filter }}</span>{% endfor %}
-                                </div>
-
-                                {% if report.missing_fields %}
-                                    <p class="mt-4 text-sm text-amber-200">Needs validation or data: {{ report.missing_fields|join:", " }}</p>
-                                {% endif %}
-                            </article>
-                        {% endfor %}
-                    </div>
-                {% else %}
-                    <p class="rounded-xl border border-slate-700 bg-slate-800 px-5 py-4 text-gray-300">No report suggestions were generated.</p>
-                {% endif %}
-            </section>
-
-            <details class="rounded-2xl border border-slate-700 bg-slate-800">
-                <summary class="cursor-pointer px-5 py-4 font-semibold">View source column profile</summary>
-                <div class="overflow-x-auto border-t border-slate-700">
-                    <table class="w-full min-w-[560px] text-left text-sm">
-                        <thead class="bg-slate-700/60 text-gray-300">
-                            <tr>
-                                <th class="px-5 py-3 font-semibold">Source column</th>
-                                <th class="px-5 py-3 font-semibold">Data type</th>
-                                <th class="px-5 py-3 font-semibold">Nulls</th>
-                                <th class="px-5 py-3 font-semibold">Unique values</th>
-                            </tr>
-                        </thead>
-                        <tbody class="divide-y divide-slate-700">
-                            {% for column in task.schema_profile %}
-                                <tr>
-                                    <td class="px-5 py-3 font-medium">{{ column.column_name }}</td>
-                                    <td class="px-5 py-3 text-gray-300">{{ column.pandas_dtype }}</td>
-                                    <td class="px-5 py-3 text-gray-300">{{ column.null_count }} ({{ column.null_percentage }}%)</td>
-                                    <td class="px-5 py-3 text-gray-300">{{ column.unique_count }}</td>
-                                </tr>
-                            {% empty %}
-                                <tr><td colspan="4" class="px-5 py-4 text-gray-400">No source profile is available.</td></tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </details>
-
-            {% if task.mapping_status == "completed" %}
-                <section class="mt-10">
-                    <h2 class="mb-2 text-2xl font-semibold">Generated mapping plan</h2>
-                    <p class="mb-4 text-gray-400">Review the suggested source-to-target mappings before using them to load data.</p>
-                    {% if task.mapping_plan.notes %}
-                        <ul class="mb-5 list-inside list-disc rounded-xl border border-amber-800/70 bg-amber-950/30 px-5 py-4 text-sm text-amber-100">
-                            {% for note in task.mapping_plan.notes %}<li>{{ note }}</li>{% endfor %}
-                        </ul>
-                    {% endif %}
-                    <div class="space-y-5">
-                        {% for table in task.mapping_plan.tables %}
-                            <article class="overflow-hidden rounded-2xl border border-slate-700 bg-slate-800">
-                                <div class="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700 px-5 py-4">
-                                    <h3 class="text-lg font-semibold">{{ table.table_name }}</h3>
-                                    <span class="text-sm text-gray-400">Deduplicate by: {{ table.deduplicate_by|join:", "|default:"Not specified" }}</span>
-                                </div>
-                                <div class="overflow-x-auto">
-                                    <table class="w-full min-w-[640px] text-left text-sm">
-                                        <thead class="bg-slate-700/60 text-gray-300">
-                                            <tr>
-                                                <th class="px-5 py-3 font-semibold">Target column</th>
-                                                <th class="px-5 py-3 font-semibold">Source columns</th>
-                                                <th class="px-5 py-3 font-semibold">Include</th>
-                                                <th class="px-5 py-3 font-semibold">Primary key</th>
-                                                <th class="px-5 py-3 font-semibold">Notes</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody class="divide-y divide-slate-700">
-                                            {% for column in table.columns %}
-                                                <tr class="align-top">
-                                                    <td class="px-5 py-3 font-medium">{{ column.target_column }}</td>
-                                                    <td class="px-5 py-3 text-gray-300">{{ column.source_columns|join:", "|default:"Not mapped" }}</td>
-                                                    <td class="px-5 py-3">{{ column.include|yesno:"Yes,No" }}</td>
-                                                    <td class="px-5 py-3">{{ column.primary_key|yesno:"Yes,No" }}</td>
-                                                    <td class="px-5 py-3 text-gray-400">{{ column.notes }}</td>
-                                                </tr>
-                                            {% endfor %}
-                                        </tbody>
-                                    </table>
-                                </div>
-                                {% if table.foreign_keys %}
-                                    <div class="border-t border-slate-700 px-5 py-4">
-                                        <h4 class="mb-2 text-sm font-semibold">Foreign-key mappings to review</h4>
-                                        <ul class="list-inside list-disc space-y-1 text-sm text-gray-300">
-                                            {% for foreign_key in table.foreign_keys %}
-                                                <li>{{ foreign_key.column }} → {{ foreign_key.references_table }}.{{ foreign_key.references_column }} ({{ foreign_key.strategy }})</li>
-                                            {% endfor %}
-                                        </ul>
-                                    </div>
-                                {% endif %}
-                            </article>
-                        {% endfor %}
-                    </div>
-                </section>
-
-                <section class="mt-10 rounded-2xl border border-slate-700 bg-slate-800 p-6">
-                    <h2 class="text-2xl font-semibold">Create or update PostgreSQL database</h2>
-                    <p class="mt-2 text-sm leading-6 text-gray-300">
-                        Enter the PostgreSQL server credentials and destination database. If the database exists, missing tables and columns will be added; existing tables and data are not dropped or rewritten.
-                    </p>
-                    {% if task.database_status == "pending" or task.database_status == "processing" %}
-                        <p class="mt-4 rounded-lg bg-slate-700 px-4 py-3">Database setup: {{ task.get_database_status_display }}. This page refreshes automatically.</p>
-                    {% elif task.database_status == "completed" %}
-                        <div class="mt-4 rounded-lg border border-emerald-800 bg-emerald-950/30 px-4 py-3">
-                            <p>Database <strong>{{ task.target_db_name }}</strong> is ready. {% if task.database_result.database_created %}It was created.{% else %}It already existed.{% endif %}</p>
-                            <p class="mt-2 text-sm text-gray-300">Connected to {{ task.database_result.host }}:{{ task.database_result.port }} as {{ task.database_result.username }}. Tables created: {{ task.database_result.tables_created|length }}; columns added: {{ task.database_result.columns_added|length }}.</p>
-                        </div>
-                        {% if task.database_result.tables_created or task.database_result.columns_added %}
-                            <ul class="mt-4 space-y-1 text-sm text-gray-300">
-                                {% for table_name in task.database_result.tables_created %}<li>Created table: {{ table_name }}</li>{% endfor %}
-                                {% for column in task.database_result.columns_added %}<li>Added column {{ column.table }}.{{ column.column }}</li>{% endfor %}
-                            </ul>
-                        {% endif %}
-                        {% if task.database_result.type_conflicts %}
-                            <div class="mt-4 rounded-lg border border-amber-800 bg-amber-950/30 p-4">
-                                <h3 class="font-semibold text-amber-200">Existing column type differences</h3>
-                                <ul class="mt-2 space-y-1 text-sm text-amber-100">
-                                    {% for conflict in task.database_result.type_conflicts %}
-                                        <li>{{ conflict.table }}.{{ conflict.column }}: expected {{ conflict.expected }}, found {{ conflict.actual }} (left unchanged)</li>
-                                    {% endfor %}
-                                </ul>
-                            </div>
-                        {% endif %}
-                        {% if task.database_result.nullability_notes %}
-                            <div class="mt-4 rounded-lg border border-amber-800 bg-amber-950/30 p-4">
-                                <h3 class="font-semibold text-amber-200">Review nullability notes</h3>
-                                <ul class="mt-2 space-y-1 text-sm text-amber-100">
-                                    {% for note in task.database_result.nullability_notes %}
-                                        <li>{{ note.table }}.{{ note.column }}: {{ note.note }}</li>
-                                    {% endfor %}
-                                </ul>
-                            </div>
-                        {% endif %}
-                        {% if task.database_result.nullability_conflicts or task.database_result.primary_key_conflicts %}
-                            <div class="mt-4 rounded-lg border border-amber-800 bg-amber-950/30 p-4">
-                                <h3 class="font-semibold text-amber-200">Existing schema constraints differ</h3>
-                                <ul class="mt-2 space-y-1 text-sm text-amber-100">
-                                    {% for conflict in task.database_result.nullability_conflicts %}
-                                        <li>{{ conflict.table }}.{{ conflict.column }} nullability differs (expected nullable={{ conflict.expected_nullable }}, found nullable={{ conflict.actual_nullable }}; left unchanged)</li>
-                                    {% endfor %}
-                                    {% for conflict in task.database_result.primary_key_conflicts %}
-                                        <li>{{ conflict.table }}.{{ conflict.column }} primary-key status differs (expected={{ conflict.expected_primary_key }}, found={{ conflict.actual_primary_key }}; left unchanged)</li>
-                                    {% endfor %}
-                                </ul>
-                            </div>
-                        {% endif %}
-                    {% elif task.database_status == "failed" %}
-                        <p class="mt-4 rounded-lg border border-red-800 bg-red-950/40 px-4 py-3 text-red-200">{{ task.database_error }}</p>
-                    {% endif %}
-
-                    {% if task.database_status != "pending" and task.database_status != "processing" %}
-                        {% if task.database_status == "completed" %}
-                            <details class="mt-6 rounded-lg border border-slate-600 p-4">
-                                <summary class="cursor-pointer font-semibold text-indigo-300">Update database connection</summary>
-                                <p class="mt-2 text-sm text-gray-400">Change the saved connection details and run database setup again. Enter the password again; the new password is stored encrypted for future imports and is never displayed.</p>
-                        {% endif %}
-                        <form method="post" action="{% url 'analyzer:setup_database' task.id %}" class="mt-6 grid gap-4 md:grid-cols-2">
-                            {% csrf_token %}
-                            <div>
-                                <label for="{{ database_connection_form.host.id_for_label }}" class="mb-1 block text-sm text-gray-300">Host</label>
-                                {{ database_connection_form.host }}
-                            </div>
-                            <div>
-                                <label for="{{ database_connection_form.port.id_for_label }}" class="mb-1 block text-sm text-gray-300">Port</label>
-                                {{ database_connection_form.port }}
-                            </div>
-                            <div>
-                                <label for="{{ database_connection_form.username.id_for_label }}" class="mb-1 block text-sm text-gray-300">Username</label>
-                                {{ database_connection_form.username }}
-                            </div>
-                            <div>
-                                <label for="{{ database_connection_form.password.id_for_label }}" class="mb-1 block text-sm text-gray-300">Password</label>
-                                {{ database_connection_form.password }}
-                            </div>
-                            <div>
-                                <label for="{{ database_connection_form.database_name.id_for_label }}" class="mb-1 block text-sm text-gray-300">Database name</label>
-                                {{ database_connection_form.database_name }}
-                            </div>
-                            <div class="flex items-end">
-                                <button type="submit" class="rounded-lg bg-indigo-600 px-5 py-2.5 font-semibold hover:bg-indigo-500">{% if task.database_status == "completed" %}Update connection and apply schema{% else %}Check database and apply missing schema{% endif %}</button>
-                            </div>
-                            <p class="text-xs text-gray-400 md:col-span-2">Password is stored encrypted for future imports after successful setup; failed setup clears it. Existing columns with different types are reported and left unchanged.</p>
-                        </form>
-                        {% if task.database_status == "completed" %}
-                            </details>
-                        {% endif %}
-                    {% endif %}
-
-                    {% if task.database_status == "completed" %}
-                        <div class="mt-8 border-t border-slate-700 pt-6">
-                            <h3 class="text-xl font-semibold">Validate and import another Excel sheet</h3>
-                            <p class="mt-2 text-sm text-gray-300">The first sheet must have the same column names and inferred data types as the original workbook. Column order may differ. Rows use mapped primary keys when available; otherwise, all mapped fields form a composite upsert key.</p>
-                            {% if not task.target_db_password_encrypted %}
-                                <p class="mt-4 rounded-lg border border-amber-800 bg-amber-950/30 px-4 py-3 text-amber-100">Update the database connection and run setup again to enable imports for this task.</p>
-                            {% else %}
-                                <form method="post" enctype="multipart/form-data" action="{% url 'analyzer:upload_data_import' task.id %}" class="mt-5 grid gap-4 md:grid-cols-[1fr_auto]">
-                                    {% csrf_token %}
-                                    <div>
-                                        <label for="{{ data_import_form.file.id_for_label }}" class="mb-1 block text-sm text-gray-300">Excel file (.xls or .xlsx)</label>
-                                        {{ data_import_form.file }}
-                                    </div>
-                                    <div class="flex items-end">
-                                        <button type="submit" class="rounded-lg bg-indigo-600 px-5 py-2.5 font-semibold hover:bg-indigo-500">Validate schema and upsert</button>
-                                    </div>
-                                </form>
-                            {% endif %}
-                        </div>
-                        {% if data_imports %}
-                            <div class="mt-6 space-y-4">
-                                <h3 class="text-lg font-semibold">Import history</h3>
-                                {% for data_import in data_imports %}
-                                    <article class="rounded-lg border border-slate-700 bg-slate-900/60 p-4">
-                                        <div class="flex flex-wrap justify-between gap-2">
-                                            <p class="font-medium">{{ data_import.file.name }}</p>
-                                            <p class="text-sm text-gray-300">{{ data_import.get_status_display }} · {{ data_import.created_at|date:"M j, Y, P" }}</p>
-                                        </div>
-                                        {% if data_import.error_message %}
-                                            <p class="mt-3 text-sm {% if data_import.status == 'schema_mismatch' or data_import.status == 'failed' %}text-red-200{% else %}text-gray-300{% endif %}">{{ data_import.error_message }}</p>
-                                        {% endif %}
-                                        {% if data_import.schema_mismatch.missing_columns %}
-                                            <p class="mt-2 text-sm text-red-200">Missing columns: {{ data_import.schema_mismatch.missing_columns|join:", " }}</p>
-                                        {% endif %}
-                                        {% if data_import.schema_mismatch.unexpected_columns %}
-                                            <p class="mt-2 text-sm text-red-200">Unexpected columns: {{ data_import.schema_mismatch.unexpected_columns|join:", " }}</p>
-                                        {% endif %}
-                                        {% if data_import.schema_mismatch.duplicate_columns %}
-                                            <p class="mt-2 text-sm text-red-200">Duplicate columns: {{ data_import.schema_mismatch.duplicate_columns|join:", " }}</p>
-                                        {% endif %}
-                                        {% if data_import.schema_mismatch.type_mismatches %}
-                                            <ul class="mt-2 space-y-1 text-sm text-red-200">
-                                                {% for mismatch in data_import.schema_mismatch.type_mismatches %}
-                                                    <li>{{ mismatch.column }}: expected {{ mismatch.expected }}, found {{ mismatch.actual }}</li>
-                                                {% endfor %}
-                                            </ul>
-                                        {% endif %}
-                                        {% if data_import.result.tables %}
-                                            <ul class="mt-3 space-y-1 text-sm text-emerald-200">
-                                                {% for table_result in data_import.result.tables %}
-                                                    <li>{{ table_result.table }}: {{ table_result.rows_processed }} rows processed</li>
-                                                {% endfor %}
-                                            </ul>
-                                        {% endif %}
-                                    </article>
-                                {% endfor %}
-                            </div>
-                        {% endif %}
-                    {% endif %}
-                </section>
-            {% endif %}
-        {% elif task.status == "pending" or task.status == "processing" %}
-            <section class="rounded-2xl border border-slate-700 bg-slate-800 p-8 text-center">
-                <h2 class="text-xl font-semibold">Analysis is {{ task.get_status_display|lower }}</h2>
-                <p class="mt-2 text-gray-400">This page will refresh automatically when analysis finishes.</p>
-            </section>
-            <meta http-equiv="refresh" content="5">
-        {% else %}
-            <section class="rounded-2xl border border-slate-700 bg-slate-800 p-8 text-center">
-                <h2 class="text-xl font-semibold">Analysis could not be completed</h2>
-                <p class="mt-2 text-gray-400">The saved task status and error are shown above.</p>
-            </section>
-        {% endif %}
-    </main>
-</body>
-</html>
+{% elif task.status == "pending" or task.status == "processing" %}
+    <div class="empty">
+        <strong>{% if task.status == "processing" %}Analyzing your workbook{% else %}Waiting for the worker to start{% endif %}</strong>
+        The model is profiling the columns and designing tables. This usually takes a few minutes, and the page refreshes on its own.
+    </div>
+{% else %}
+    <div class="empty">
+        <strong>This analysis didn't finish</strong>
+        The error above explains what went wrong. If the worker or Ollama wasn't running, start it and try again. If the workbook itself is the problem, fix it and upload it again.
+        <div class="btn-row empty-actions">
+            {% include "analyzer/_retry_button.html" with step="analysis" label="Try again" button_class="btn-primary" %}
+        </div>
+    </div>
+{% endif %}
+{% endblock %}

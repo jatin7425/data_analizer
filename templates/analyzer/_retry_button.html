@@ -1,0 +1,5 @@
+<form method="post" action="{% url 'analyzer:retry_task' task.id %}" class="inline-form"{% if confirm %} onsubmit="return confirm('{{ confirm|escapejs }}');"{% endif %}>
+    {% csrf_token %}
+    <input type="hidden" name="step" value="{{ step }}">
+    <button type="submit" class="btn {{ button_class|default:'btn-secondary' }}">{{ label }}</button>
+</form>

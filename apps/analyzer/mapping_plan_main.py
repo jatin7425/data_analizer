@@ -6,9 +6,6 @@ import json
 import os
 from pathlib import Path
 
-from dotenv import load_dotenv
-
-load_dotenv()
 
 DESIGN_FILE = Path(os.getenv("DATABASE_DESIGN_FILE", "database_design.json"))
 PLAN_FILE = Path(os.getenv("MAPPING_PLAN_FILE", "data_mapping_plan.json"))

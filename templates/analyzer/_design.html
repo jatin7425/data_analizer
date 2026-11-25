@@ -1,0 +1,125 @@
+{% load analyzer_extras %}
+{# ---- Proposed tables ---- #}
+<section class="section" aria-labelledby="tables-heading">
+    <div class="section-head">
+        <h2 id="tables-heading">Proposed tables</h2>
+        <p>How the model suggests splitting your sheet into normalized PostgreSQL tables.</p>
+    </div>
+
+    {% for table in schema_tables %}
+        <article class="panel table-card">
+            <div class="panel-head">
+                <h3>{{ table.table_name }}</h3>
+                {% if table.purpose %}<p>{{ table.purpose }}</p>{% endif %}
+            </div>
+            <div class="table-wrap">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th scope="col">Column</th>
+                            <th scope="col">Type</th>
+                            <th scope="col">Required</th>
+                            <th scope="col">Key</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for column in table.columns %}
+                            <tr>
+                                <td class="ident">{{ column.column_name }}</td>
+                                <td class="type">{{ column.postgres_type|default:"TEXT" }}</td>
+                                <td>{{ column.nullable|yesno:"No,Yes" }}</td>
+                                <td>
+                                    {% if column.primary_key %}<span class="key-tag">Primary key</span>{% elif column.foreign_key %}<span class="key-tag">Foreign key</span>{% else %}<span class="muted">None</span>{% endif %}
+                                </td>
+                            </tr>
+                        {% empty %}
+                            <tr><td colspan="4" class="muted">No columns were proposed for this table.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </article>
+    {% empty %}
+        <p class="empty">The model didn't propose any tables for this workbook.</p>
+    {% endfor %}
+
+    <details class="disclosure gap-top">
+        <summary>SQL for these tables</summary>
+        <pre class="sql"><code>{{ task.proposed_schema }}</code></pre>
+    </details>
+
+    <details class="disclosure gap-top">
+        <summary>Columns in your sheet</summary>
+        <div class="table-wrap">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th scope="col" class="col-letter"><span class="visually-hidden">Sheet column</span></th>
+                        <th scope="col">Header</th>
+                        <th scope="col">Detected type</th>
+                        <th scope="col">Empty cells</th>
+                        <th scope="col">Distinct values</th>
+                        <th scope="col">Examples</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for column in task.schema_profile %}
+                        <tr>
+                            <th scope="row" class="col-letter">{{ forloop.counter|excel_column }}</th>
+                            <td>{{ column.column_name }}</td>
+                            <td class="type">{{ column.pandas_dtype }}</td>
+                            <td>{{ column.null_count }} <span class="muted">({{ column.null_percentage }}%)</span></td>
+                            <td>{{ column.unique_count }}</td>
+                            <td class="muted small break">{{ column.sample_values|slice:":3"|join:", " }}</td>
+                        </tr>
+                    {% empty %}
+                        <tr><td colspan="6" class="muted">No column profile is available.</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </details>
+</section>
+
+{# ---- Report ideas ---- #}
+<section class="section" aria-labelledby="reports-heading">
+    <div class="section-head">
+        <h2 id="reports-heading">Report ideas</h2>
+        <p>Reports this data could support, and what each one would still need.</p>
+    </div>
+    {% if reports %}
+        <div class="report-grid">
+            {% for report in reports %}
+                <article class="panel report">
+                    <div class="report-head">
+                        <div>
+                            <h3>{% firstof report.report_name report.report_id "Untitled report" %}</h3>
+                            {% if report.category %}<p class="report-category">{{ report.category }}</p>{% endif %}
+                        </div>
+                        {% if report.feasibility == "available" %}
+                            <span class="pill pill-done">Ready to build</span>
+                        {% elif report.feasibility == "requires_data" %}
+                            <span class="pill pill-action">Needs more data</span>
+                        {% elif report.feasibility == "requires_validation" %}
+                            <span class="pill pill-action">Needs checking</span>
+                        {% elif report.feasibility %}
+                            <span class="pill">{{ report.feasibility|humanize_key }}</span>
+                        {% endif %}
+                    </div>
+                    {% if report.description %}<p class="report-desc">{{ report.description }}</p>{% endif %}
+                    <dl>
+                        {% if report.metrics %}<dt>Metrics</dt><dd>{{ report.metrics|join:", " }}</dd>{% endif %}
+                        {% if report.required_columns %}<dt>Uses</dt><dd>{{ report.required_columns|join:", " }}</dd>{% endif %}
+                        {% if report.filters %}<dt>Filters</dt><dd>{{ report.filters|join:", " }}</dd>{% endif %}
+                        {% if report.visualization %}<dt>Chart</dt><dd>{{ report.visualization|humanize_key }}</dd>{% endif %}
+                    </dl>
+                    {% if report.missing_fields %}
+                        <p class="report-missing">Missing: {{ report.missing_fields|join:", " }}</p>
+                    {% endif %}
+                </article>
+            {% endfor %}
+        </div>
+    {% else %}
+        <p class="empty">No report ideas were generated for this workbook.</p>
+    {% endif %}
+</section>

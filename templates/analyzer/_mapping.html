@@ -1,0 +1,55 @@
+{# ---- Mapping plan ---- #}
+<section class="section" aria-labelledby="mapping-heading">
+    <div class="section-head">
+        <h2 id="mapping-heading">Mapping plan</h2>
+        <p>Which columns in your sheet fill each table column during imports.</p>
+    </div>
+    {% if task.mapping_plan.notes %}
+        <div class="notice notice-warning gap-bottom">
+            <h3>Check before importing</h3>
+            <ul>{% for note in task.mapping_plan.notes %}<li>{{ note }}</li>{% endfor %}</ul>
+        </div>
+    {% endif %}
+    {% for table in task.mapping_plan.tables %}
+        <article class="panel table-card">
+            <div class="panel-head">
+                <h3>{{ table.table_name }}</h3>
+                <p>Matches existing rows by {{ table.deduplicate_by|join:", "|default:"all mapped columns" }}</p>
+            </div>
+            <div class="table-wrap">
+                <table class="data-table data-table-wide">
+                    <thead>
+                        <tr>
+                            <th scope="col">Table column</th>
+                            <th scope="col">From sheet column</th>
+                            <th scope="col">Imported</th>
+                            <th scope="col">Primary key</th>
+                            <th scope="col">Notes</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for column in table.columns %}
+                            <tr>
+                                <td class="ident">{{ column.target_column }}</td>
+                                <td>{{ column.source_columns|join:", "|default:"Not mapped" }}</td>
+                                <td>{{ column.include|yesno:"Yes,No" }}</td>
+                                <td>{{ column.primary_key|yesno:"Yes,No" }}</td>
+                                <td class="muted small">{{ column.notes }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if table.foreign_keys %}
+                <div class="table-card-foot">
+                    <h4>Foreign keys to check</h4>
+                    <ul>
+                        {% for foreign_key in table.foreign_keys %}
+                            <li><span class="code">{{ foreign_key.column }}</span> references <span class="code">{{ foreign_key.references_table }}.{{ foreign_key.references_column }}</span> ({{ foreign_key.strategy }})</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+            {% endif %}
+        </article>
+    {% endfor %}
+</section>

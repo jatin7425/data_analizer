@@ -140,8 +140,12 @@ def ensure_database_and_schema(
         "nullability_notes": [],
     }
 
-    with psycopg2.connect(dbname="postgres", **connection_args) as admin_connection:
-        admin_connection.autocommit = True
+    # CREATE DATABASE can't run inside a transaction. Since psycopg2 2.9,
+    # "with connection:" opens one, so set autocommit on a plain connection
+    # before running anything, and close it explicitly.
+    admin_connection = psycopg2.connect(dbname="postgres", **connection_args)
+    admin_connection.autocommit = True
+    try:
         with admin_connection.cursor() as cursor:
             cursor.execute(
                 "SELECT 1 FROM pg_database WHERE datname = %s",
@@ -158,6 +162,8 @@ def ensure_database_and_schema(
                     result["database_created"] = True
                 except DuplicateDatabase:
                     exists = True
+    finally:
+        admin_connection.close()
 
     target_connection = psycopg2.connect(dbname=database_name, **connection_args)
     try:

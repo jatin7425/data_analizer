@@ -2,17 +2,20 @@ from django.test import TestCase
 from django.urls import reverse
 
 
-class AuthenticationFormVisibilityTests(TestCase):
-    def test_login_inputs_use_visible_text_colors(self):
+class AuthenticationPageTests(TestCase):
+    def test_login_page_renders_labelled_fields_with_shared_styles(self):
         response = self.client.get(reverse("accounts:login"))
 
-        self.assertContains(response, "color: #f8fafc !important;")
-        self.assertContains(response, "background-color: #0f172a;")
-        self.assertContains(response, "-webkit-text-fill-color: #f8fafc;")
+        self.assertContains(response, "analyzer/app.css")
+        self.assertContains(response, '<label for="id_username">')
+        self.assertContains(response, '<label for="id_password">')
+        self.assertContains(response, reverse("accounts:signup"))
 
-    def test_signup_inputs_use_visible_text_colors(self):
+    def test_signup_page_renders_labelled_fields_with_shared_styles(self):
         response = self.client.get(reverse("accounts:signup"))
 
-        self.assertContains(response, "color: #f8fafc !important;")
-        self.assertContains(response, "background-color: #0f172a;")
-        self.assertContains(response, "-webkit-text-fill-color: #f8fafc;")
+        self.assertContains(response, "analyzer/app.css")
+        self.assertContains(response, '<label for="id_username">')
+        self.assertContains(response, '<label for="id_email">')
+        self.assertContains(response, '<label for="id_password1">')
+        self.assertContains(response, reverse("accounts:login"))

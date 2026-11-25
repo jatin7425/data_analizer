@@ -11,7 +11,7 @@ class ExcelUploadForm(forms.ModelForm):
         model = ExcelUpload
         fields = ["file"]
         widgets = {
-            "file": forms.ClearableFileInput(attrs={"accept": ".xls,.xlsx"}),
+            "file": forms.ClearableFileInput(attrs={"accept": ".xls,.xlsx", "class": "file-input"}),
         }
 
 
@@ -19,7 +19,7 @@ class DatabaseConnectionForm(forms.Form):
     host = forms.CharField(
         max_length=255,
         widget=forms.TextInput(
-            attrs={"class": "w-full rounded-lg bg-slate-900 p-2.5 text-white"}
+            attrs={"class": "input"}
         ),
     )
     port = forms.IntegerField(
@@ -27,26 +27,26 @@ class DatabaseConnectionForm(forms.Form):
         max_value=65535,
         initial=5432,
         widget=forms.NumberInput(
-            attrs={"class": "w-full rounded-lg bg-slate-900 p-2.5 text-white"}
+            attrs={"class": "input"}
         ),
     )
     username = forms.CharField(
         max_length=255,
         widget=forms.TextInput(
-            attrs={"class": "w-full rounded-lg bg-slate-900 p-2.5 text-white"}
+            attrs={"class": "input"}
         ),
     )
     password = forms.CharField(
         strip=False,
         widget=forms.PasswordInput(
             render_value=False,
-            attrs={"class": "w-full rounded-lg bg-slate-900 p-2.5 text-white"},
+            attrs={"class": "input"},
         ),
     )
     database_name = forms.CharField(
         max_length=63,
         widget=forms.TextInput(
-            attrs={"class": "w-full rounded-lg bg-slate-900 p-2.5 text-white"}
+            attrs={"class": "input"}
         ),
     )
 
@@ -74,7 +74,7 @@ class DataImportForm(forms.Form):
         widget=forms.ClearableFileInput(
             attrs={
                 "accept": ".xls,.xlsx",
-                "class": "w-full rounded-lg bg-slate-900 p-2.5 text-white",
+                "class": "file-input",
             }
         ),
     )

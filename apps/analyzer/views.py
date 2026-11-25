@@ -1,5 +1,6 @@
 import logging
 
+from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.db import transaction
@@ -8,6 +9,7 @@ from django.views.decorators.http import require_POST
 
 from .forms import DataImportForm, DatabaseConnectionForm, ExcelUploadForm
 from .models import AnalysisTask, DataImport, ExcelUpload
+from .progress import current_stage, task_stages
 from .security import encrypt_database_password
 from .tasks import (
     generate_mapping_plan,
@@ -25,11 +27,19 @@ def dashboard(request):
         user=request.user,
         is_deleted=False,
     ).select_related("upload")
+    task_list = list(tasks)
+    for task in task_list:
+        latest_import = (
+            task.data_imports.first()
+            if task.database_status == AnalysisTask.DatabaseStatus.COMPLETED
+            else None
+        )
+        task.stage = current_stage(task_stages(task, latest_import))
     return render(
         request,
         "analyzer/dashboard.html",
         {
-            "tasks": tasks,
+            "tasks": task_list,
             "has_active_tasks": tasks.filter(
                 status__in=[AnalysisTask.Status.PENDING, AnalysisTask.Status.PROCESSING]
             ).exists()
@@ -52,12 +62,21 @@ def task_detail(request, task_id):
     )
     schema_tables = task.database_design.get("tables", [])
     reports = task.report_catalogue.get("reports", [])
-    data_imports = task.data_imports.all()
+    data_imports = list(task.data_imports.all())
+    default_database = settings.DATABASES["default"]
+    app_database = {
+        "HOST": default_database.get("HOST") or "localhost",
+        "PORT": int(default_database.get("PORT") or 5432),
+        "USER": default_database.get("USER") or "",
+    }
+    stages = task_stages(task, data_imports[0] if data_imports else None)
     return render(
         request,
         "analyzer/task_detail.html",
         {
             "task": task,
+            "stages": stages,
+            "current_stage": current_stage(stages),
             "schema_tables": schema_tables,
             "reports": reports,
             "data_imports": data_imports,
@@ -66,12 +85,15 @@ def task_detail(request, task_id):
             ).exists(),
             "database_connection_form": DatabaseConnectionForm(
                 initial={
-                    "host": task.target_db_host,
-                    "port": task.target_db_port or 5432,
-                    "username": task.target_db_user,
+                    # Until a connection is saved, suggest the PostgreSQL server
+                    # this app already uses (from .env).
+                    "host": task.target_db_host or app_database["HOST"],
+                    "port": task.target_db_port or app_database["PORT"],
+                    "username": task.target_db_user or app_database["USER"],
                     "database_name": task.target_db_name,
                 }
             ),
+            "app_database": app_database,
             "data_import_form": DataImportForm(),
         },
     )
@@ -190,6 +212,64 @@ def upload_data_import(request, task_id):
         lambda import_id=data_import.pk: enqueue_data_import_task(import_id)
     )
     messages.success(request, "Excel schema validation and data import were queued.")
+    return redirect("analyzer:task_detail", task_id=task.pk)
+
+
+@login_required
+@require_POST
+def retry_task(request, task_id):
+    """Re-run a failed step, or re-analyze a design that hasn't been approved."""
+    task = get_object_or_404(
+        AnalysisTask.objects.filter(user=request.user, is_deleted=False),
+        pk=task_id,
+    )
+    step = request.POST.get("step")
+
+    if step == "analysis":
+        # Allowed until a database has been set up from this design.
+        can_retry = task.status == AnalysisTask.Status.FAILED or (
+            task.status == AnalysisTask.Status.COMPLETED
+            and task.database_status
+            in (AnalysisTask.DatabaseStatus.NOT_STARTED, AnalysisTask.DatabaseStatus.FAILED)
+            and task.mapping_status
+            not in (AnalysisTask.MappingStatus.PENDING, AnalysisTask.MappingStatus.PROCESSING)
+        )
+        if not can_retry:
+            messages.error(request, "This analysis can't be run again right now.")
+            return redirect("analyzer:task_detail", task_id=task.pk)
+        task.status = AnalysisTask.Status.PENDING
+        task.error_message = ""
+        task.schema_profile = []
+        task.database_design = {}
+        task.proposed_schema = ""
+        task.report_catalogue = {}
+        task.review_status = AnalysisTask.ReviewStatus.PENDING
+        task.mapping_status = AnalysisTask.MappingStatus.NOT_STARTED
+        task.mapping_plan = {}
+        task.mapping_error = ""
+        task.database_status = AnalysisTask.DatabaseStatus.NOT_STARTED
+        task.database_error = ""
+        task.database_result = {}
+        task.save()
+        transaction.on_commit(lambda task_id=task.pk: enqueue_analysis_task(task_id))
+        messages.success(request, "Analysis restarted. This page refreshes when it's done.")
+        return redirect("analyzer:task_detail", task_id=task.pk)
+
+    if step == "mapping":
+        if not (
+            task.review_status == AnalysisTask.ReviewStatus.APPROVED
+            and task.mapping_status == AnalysisTask.MappingStatus.FAILED
+        ):
+            messages.error(request, "The mapping plan can't be built again right now.")
+            return redirect("analyzer:task_detail", task_id=task.pk)
+        task.mapping_status = AnalysisTask.MappingStatus.PENDING
+        task.mapping_error = ""
+        task.save(update_fields=["mapping_status", "mapping_error", "updated_at"])
+        transaction.on_commit(lambda task_id=task.pk: enqueue_mapping_plan_task(task_id))
+        messages.success(request, "Building the mapping plan again.")
+        return redirect("analyzer:task_detail", task_id=task.pk)
+
+    messages.error(request, "Choose a step to retry.")
     return redirect("analyzer:task_detail", task_id=task.pk)
 
 

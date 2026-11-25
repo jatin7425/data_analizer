@@ -72,7 +72,7 @@ class ExcelUploadTests(TestCase):
         response = self.client.get(reverse("analyzer:dashboard"))
         self.assertContains(response, "sales.xlsx")
         self.assertContains(response, "Pending")
-        self.assertContains(response, "Is deleted")
+        self.assertContains(response, "pill-working")
 
     def test_upload_enqueues_analysis_after_commit(self):
         with patch("apps.analyzer.views.process_excel_upload.delay") as enqueue:
@@ -1080,6 +1080,11 @@ class ExcelUploadTests(TestCase):
 
         self.assertEqual(target_connection.__enter__.call_count, 1)
         self.assertEqual(result["tables_created"], ["orders"])
+        # psycopg2 2.9+ opens a transaction on "with connection:", which
+        # breaks CREATE DATABASE; the admin connection must not be entered.
+        admin_connection.__enter__.assert_not_called()
+        self.assertIs(admin_connection.autocommit, True)
+        admin_connection.close.assert_called_once()
 
     def test_user_can_soft_delete_task_from_dashboard(self):
         upload = ExcelUpload.objects.create(
@@ -1140,3 +1145,216 @@ class ExcelUploadTests(TestCase):
             response,
             f"{reverse('accounts:login')}?next={reverse('analyzer:dashboard')}",
         )
+
+
+class NormalizeDesignTests(TestCase):
+    def design(self, order_columns):
+        return {
+            "tables": [
+                {
+                    "table_name": "customers",
+                    "columns": [
+                        {"column_name": "customer_id", "postgres_type": "INTEGER", "primary_key": True},
+                        {"column_name": "email", "postgres_type": "VARCHAR(255)"},
+                    ],
+                },
+                {"table_name": "orders", "columns": order_columns},
+            ]
+        }
+
+    def test_foreign_key_on_own_primary_key_is_removed_instead_of_failing(self):
+        from .processor_utils import normalize_design
+
+        design = self.design([
+            {"column_name": "order_id", "postgres_type": "INTEGER", "primary_key": True,
+             "foreign_key": {"references_table": "orders", "references_column": "order_id"}},
+        ])
+
+        notes = normalize_design(design)
+
+        self.assertIsNone(design["tables"][1]["columns"][0]["foreign_key"])
+        self.assertTrue(any("orders.order_id" in note for note in notes))
+
+    def test_common_foreign_key_shapes_become_structured_references(self):
+        from .processor_utils import normalize_design
+
+        shapes = [
+            "customers.customer_id",
+            "customers(customer_id)",
+            {"table": "customers", "column": "customer_id"},
+            {"references": "customers.customer_id"},
+            {"references_table": "Customers"},
+        ]
+        for shape in shapes:
+            with self.subTest(shape=shape):
+                design = self.design([
+                    {"column_name": "customer_id", "postgres_type": "INTEGER", "foreign_key": shape},
+                ])
+                normalize_design(design)
+                self.assertEqual(
+                    design["tables"][1]["columns"][0]["foreign_key"],
+                    {"references_table": "customers", "references_column": "customer_id"},
+                )
+
+    def test_unusable_foreign_keys_are_removed(self):
+        from .processor_utils import normalize_design
+
+        for shape in [True, "yes", {"references_table": "missing_table"}, 42]:
+            with self.subTest(shape=shape):
+                design = self.design([
+                    {"column_name": "customer_id", "postgres_type": "INTEGER", "foreign_key": shape},
+                ])
+                normalize_design(design)
+                self.assertIsNone(design["tables"][1]["columns"][0]["foreign_key"])
+
+    def test_types_and_flags_are_coerced_to_allowed_values(self):
+        from .processor_utils import ALLOWED_TYPES, normalize_design
+
+        design = self.design([
+            {"column_name": "a", "postgres_type": "varchar(20)", "nullable": "no", "primary_key": "true"},
+            {"column_name": "b", "postgres_type": "DECIMAL(12, 2)", "nullable": "maybe"},
+            {"column_name": "c", "postgres_type": "DATETIME"},
+            {"column_name": "d", "postgres_type": "GEOGRAPHY"},
+        ])
+
+        normalize_design(design)
+
+        columns = design["tables"][1]["columns"]
+        self.assertEqual([c["postgres_type"] for c in columns], ["VARCHAR(50)", "NUMERIC(12,2)", "TIMESTAMP", "TEXT"])
+        self.assertTrue(all(c["postgres_type"] in ALLOWED_TYPES for c in columns))
+        self.assertEqual((columns[0]["nullable"], columns[0]["primary_key"]), (False, True))
+        self.assertIs(columns[1]["nullable"], True)
+
+    def test_source_columns_are_matched_to_real_sheet_headers(self):
+        from .processor_utils import normalize_design
+
+        design = self.design([
+            {"column_name": "order_id", "postgres_type": "INTEGER", "source_columns": ["order_id"]},
+            {"column_name": "email", "postgres_type": "TEXT", "source_columns": "customer email"},
+            {"column_name": "made_up", "postgres_type": "TEXT", "source_columns": ["not_in_sheet"]},
+        ])
+
+        # processor_main passes the DataFrame's columns, a pandas Index.
+        normalize_design(design, source_headers=pd.Index(["Order ID", "Customer Email"]))
+
+        columns = design["tables"][1]["columns"]
+        self.assertEqual(columns[0]["source_columns"], ["Order ID"])
+        self.assertEqual(columns[1]["source_columns"], ["Customer Email"])
+        self.assertEqual(columns[2]["source_columns"], [])
+
+
+    def test_columns_without_a_sheet_source_cannot_be_required_keys(self):
+        from .processor_utils import normalize_design
+
+        design = self.design([
+            {"column_name": "customer_id", "postgres_type": "INTEGER", "primary_key": True,
+             "nullable": False, "source_columns": [],
+             "foreign_key": {"references_table": "customers", "references_column": "customer_id"}},
+            {"column_name": "order_id", "postgres_type": "INTEGER", "primary_key": True,
+             "nullable": False, "source_columns": ["Order ID"]},
+        ])
+
+        normalize_design(design, source_headers=pd.Index(["Order ID"]))
+
+        invented, real = design["tables"][1]["columns"]
+        self.assertEqual((invented["primary_key"], invented["nullable"]), (False, True))
+        self.assertIsNone(invented.get("foreign_key"))
+        self.assertEqual((real["primary_key"], real["nullable"]), (True, False))
+
+    def test_columns_fed_by_sheet_columns_with_blanks_allow_empty_values(self):
+        from .processor_utils import normalize_design
+
+        design = self.design([
+            {"column_name": "order_id", "postgres_type": "INTEGER", "primary_key": True,
+             "nullable": False, "source_columns": ["Order ID"]},
+            {"column_name": "coupon_code", "postgres_type": "VARCHAR(50)",
+             "nullable": False, "source_columns": ["Coupon Code"]},
+        ])
+        profile = [
+            {"column_name": "Order ID", "null_count": 0},
+            {"column_name": "Coupon Code", "null_count": 168},
+        ]
+
+        normalize_design(design, source_headers=pd.Index(["Order ID", "Coupon Code"]), schema_profile=profile)
+
+        order_id, coupon = design["tables"][1]["columns"]
+        self.assertIs(coupon["nullable"], True)
+        self.assertIs(order_id["nullable"], False)
+
+class RetryTaskTests(TestCase):
+    def setUp(self):
+        self.media_directory = TemporaryDirectory()
+        settings_override = override_settings(MEDIA_ROOT=self.media_directory.name)
+        settings_override.enable()
+        self.addCleanup(settings_override.disable)
+        self.addCleanup(self.media_directory.cleanup)
+        self.user = User.objects.create_user(username="analyst", password="test-password")
+        self.client.force_login(self.user)
+        upload = ExcelUpload.objects.create(
+            user=self.user, file=SimpleUploadedFile("sales.xlsx", b"spreadsheet")
+        )
+        self.task = AnalysisTask.objects.create(
+            user=self.user, upload=upload, excel_sheet_name=upload.filename
+        )
+
+    def retry(self, step):
+        with self.captureOnCommitCallbacks(execute=True):
+            return self.client.post(
+                reverse("analyzer:retry_task", args=[self.task.pk]), {"step": step}
+            )
+
+    @patch("apps.analyzer.views.process_excel_upload.delay")
+    def test_failed_analysis_is_reset_and_queued_again(self, enqueue):
+        enqueue.return_value.id = "celery-id"
+        AnalysisTask.objects.filter(pk=self.task.pk).update(
+            status=AnalysisTask.Status.FAILED, error_message="Ollama is unavailable"
+        )
+
+        self.retry("analysis")
+
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, AnalysisTask.Status.PENDING)
+        self.assertEqual(self.task.error_message, "")
+        enqueue.assert_called_once_with(self.task.pk)
+
+    @patch("apps.analyzer.views.process_excel_upload.delay")
+    def test_analysis_cannot_be_rerun_after_database_setup(self, enqueue):
+        AnalysisTask.objects.filter(pk=self.task.pk).update(
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            mapping_status=AnalysisTask.MappingStatus.COMPLETED,
+            database_status=AnalysisTask.DatabaseStatus.COMPLETED,
+            database_design={"tables": []},
+        )
+
+        self.retry("analysis")
+
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.status, AnalysisTask.Status.COMPLETED)
+        self.assertEqual(self.task.database_design, {"tables": []})
+        enqueue.assert_not_called()
+
+    @patch("apps.analyzer.views.generate_mapping_plan.delay")
+    def test_failed_mapping_plan_is_queued_again(self, enqueue):
+        enqueue.return_value.id = "celery-id"
+        AnalysisTask.objects.filter(pk=self.task.pk).update(
+            status=AnalysisTask.Status.COMPLETED,
+            review_status=AnalysisTask.ReviewStatus.APPROVED,
+            mapping_status=AnalysisTask.MappingStatus.FAILED,
+            mapping_error="boom",
+        )
+
+        self.retry("mapping")
+
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.mapping_status, AnalysisTask.MappingStatus.PENDING)
+        self.assertEqual(self.task.mapping_error, "")
+        enqueue.assert_called_once_with(self.task.pk)
+
+    def test_other_users_cannot_retry(self):
+        other = User.objects.create_user(username="other", password="test-password")
+        self.client.force_login(other)
+
+        response = self.retry("analysis")
+
+        self.assertEqual(response.status_code, 404)

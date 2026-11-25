@@ -14,5 +14,6 @@ urlpatterns = [
         name="upload_data_import",
     ),
     path("tasks/<int:task_id>/review/", views.review_task, name="review_task"),
+    path("tasks/<int:task_id>/retry/", views.retry_task, name="retry_task"),
     path("tasks/<int:task_id>/delete/", views.delete_task, name="delete_task"),
 ]

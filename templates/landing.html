@@ -1,59 +1,98 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Excel AI Analyzer - Transform Messy Sheets into Clean Insights</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-slate-900 text-white font-sans antialiased">
+{% extends "base.html" %}
 
-    <!-- Header Navigation -->
-    <header class="max-w-7xl mx-auto px-6 py-6 flex justify-between items-center">
-        <div class="text-2xl font-bold tracking-tight text-indigo-400">📊 ExcelAnalyzer.ai</div>
+{% block title %}Excel Analyzer: turn spreadsheets into PostgreSQL databases{% endblock %}
+
+{% block content %}
+<section class="hero">
+    <h1>Turn a flat spreadsheet into a real database.</h1>
+    <p class="hero-lede">
+        Upload an Excel workbook. A language model running on your own machine proposes
+        normalized PostgreSQL tables. You review the design, then the app builds the
+        database and keeps loading new sheets into it.
+    </p>
+    <div class="btn-row">
+        {% if user.is_authenticated %}
+            <a href="{% url 'analyzer:dashboard' %}" class="btn btn-primary">Open dashboard</a>
+        {% else %}
+            <a href="{% url 'accounts:signup' %}" class="btn btn-primary">Create account</a>
+            <a href="{% url 'accounts:login' %}" class="btn btn-secondary">Log in</a>
+        {% endif %}
+    </div>
+
+    <div class="demo" aria-label="Example: one flat sheet split into two tables">
         <div>
-            {% if user.is_authenticated %}
-                <a href="{% url 'analyzer:dashboard' %}" class="bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 rounded-lg font-semibold transition">Dashboard</a>
-            {% else %}
-                <a href="{% url 'accounts:login' %}" class="text-gray-300 hover:text-white mr-6 font-medium">Log In</a>
-                <a href="{% url 'accounts:signup' %}" class="bg-indigo-600 hover:bg-indigo-500 px-5 py-2.5 rounded-lg font-semibold transition">Get Started Free</a>
-            {% endif %}
+            <p class="demo-caption">Your sheet</p>
+            <div class="table-wrap">
+                <table class="sheet">
+                    <thead>
+                        <tr><th scope="col"></th><th scope="col">A</th><th scope="col">B</th><th scope="col">C</th><th scope="col">D</th><th scope="col">E</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><th scope="row">1</th><td>Order</td><td>Date</td><td>Customer</td><td>Email</td><td>Amount</td></tr>
+                        <tr><th scope="row">2</th><td>1001</td><td>2026-03-02</td><td class="repeat">Asha Rao</td><td class="repeat">asha@example.com</td><td>1,240</td></tr>
+                        <tr><th scope="row">3</th><td>1002</td><td>2026-03-02</td><td>Dev Mehta</td><td>dev@example.com</td><td>860</td></tr>
+                        <tr><th scope="row">4</th><td>1003</td><td>2026-03-05</td><td class="repeat">Asha Rao</td><td class="repeat">asha@example.com</td><td>415</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <p class="demo-note">Customer details repeat on every order.</p>
         </div>
-    </header>
 
-    <!-- Hero Section -->
-    <section class="max-w-5xl mx-auto text-center px-6 py-24">
-        <span class="bg-indigo-900/50 text-indigo-300 text-sm font-medium px-4 py-1.5 rounded-full border border-indigo-700/50">Next-Gen Data Normalization Engine</span>
-        <h1 class="text-5xl md:text-6xl font-extrabold mt-6 leading-tight">
-            Turn Messy Excel Spreadsheets Into <span class="text-indigo-400">Actionable Data Insights</span>
-        </h1>
-        <p class="text-gray-400 text-lg mt-6 max-w-2xl mx-auto">
-            Automatically detect missing values, normalize unstandardized columns, generate instant statistical reports, and export clean database-ready datasets in seconds.
-        </p>
-        <div class="mt-10 flex justify-center gap-4">
-            <a href="{% url 'accounts:signup' %}" class="bg-indigo-600 hover:bg-indigo-500 text-white text-lg font-semibold px-8 py-3.5 rounded-xl shadow-lg transition">Start Analyzing Free</a>
-            <a href="#features" class="bg-slate-800 hover:bg-slate-700 text-gray-200 text-lg font-semibold px-8 py-3.5 rounded-xl transition">See Features</a>
-        </div>
-    </section>
+        <div class="demo-arrow" aria-hidden="true">&rarr;</div>
 
-    <!-- Feature Grid -->
-    <section id="features" class="max-w-7xl mx-auto px-6 py-16 grid md:grid-cols-3 gap-8">
-        <div class="bg-slate-800/60 p-8 rounded-2xl border border-slate-700/50">
-            <div class="text-3xl mb-4">⚡</div>
-            <h3 class="text-xl font-bold text-white mb-2">Automated Normalization</h3>
-            <p class="text-gray-400">Identify formatting errors, inconsistent data types, and non-standard headers automatically.</p>
+        <div>
+            <p class="demo-caption">Proposed tables</p>
+            <div class="demo-tables">
+                <table class="sheet">
+                    <caption>customers</caption>
+                    <thead><tr><th scope="col">customer_id</th><th scope="col">name</th><th scope="col">email</th></tr></thead>
+                    <tbody>
+                        <tr><td>1</td><td>Asha Rao</td><td>asha@example.com</td></tr>
+                        <tr><td>2</td><td>Dev Mehta</td><td>dev@example.com</td></tr>
+                    </tbody>
+                </table>
+                <table class="sheet">
+                    <caption>orders</caption>
+                    <thead><tr><th scope="col">order_id</th><th scope="col">customer_id</th><th scope="col">order_date</th><th scope="col">amount</th></tr></thead>
+                    <tbody>
+                        <tr><td>1001</td><td>1</td><td>2026-03-02</td><td>1240.00</td></tr>
+                        <tr><td>1002</td><td>2</td><td>2026-03-02</td><td>860.00</td></tr>
+                        <tr><td>1003</td><td>1</td><td>2026-03-05</td><td>415.00</td></tr>
+                    </tbody>
+                </table>
+            </div>
         </div>
-        <div class="bg-slate-800/60 p-8 rounded-2xl border border-slate-700/50">
-            <div class="text-3xl mb-4">🔍</div>
-            <h3 class="text-xl font-bold text-white mb-2">Deep Insights</h3>
-            <p class="text-gray-400">Uncover summary statistics, null distributions, and duplication metrics instantly.</p>
-        </div>
-        <div class="bg-slate-800/60 p-8 rounded-2xl border border-slate-700/50">
-            <div class="text-3xl mb-4">🔒</div>
-            <h3 class="text-xl font-bold text-white mb-2">Enterprise Security</h3>
-            <p class="text-gray-400">Powered by isolated PostgreSQL database instances ensuring data confidentiality and integrity.</p>
-        </div>
-    </section>
+    </div>
+</section>
 
-</body>
-</html>
+<section class="section">
+    <div class="section-head">
+        <h2>How it works</h2>
+    </div>
+    <ol class="steps">
+        <li>
+            <h3>Upload a workbook</h3>
+            <p>The app profiles each column: its type, empty cells, and distinct values.</p>
+        </li>
+        <li>
+            <h3>Review the design</h3>
+            <p>Check the proposed tables, keys, SQL, and report ideas. Nothing is created until you approve.</p>
+        </li>
+        <li>
+            <h3>Connect PostgreSQL</h3>
+            <p>Enter a server and database name. Missing tables and columns are added; existing data is left alone.</p>
+        </li>
+        <li>
+            <h3>Import new sheets</h3>
+            <p>Each upload is checked against the original columns, then rows are inserted or updated without duplicates.</p>
+        </li>
+    </ol>
+</section>
+{% endblock %}
+
+{% block body %}
+    {{ block.super }}
+    <footer class="footer">
+        <div class="shell">The model runs through Ollama on your own machine, and data is written only to the PostgreSQL server you choose.</div>
+    </footer>
+{% endblock %}
